@@ -23,9 +23,26 @@ def greet():
 
 
 @genesis.command()
-def new(project_type, name):
-    """Initializes a new project using an interactive wizard."""
-    project.run_project_wizard()
+@click.option('--name', help='Project name. Prompts if omitted.')
+@click.option(
+    '--template',
+    type=click.Choice(project.get_template_choices()),
+    help='Project template to use. Prompts if omitted.'
+)
+@click.option(
+    '--git/--no-git',
+    'use_git',
+    default=None,
+    help='Initialize a Git repository. Prompts if omitted.'
+)
+@click.option(
+    '--yes',
+    is_flag=True,
+    help='Skip the final confirmation step when enough details are provided.'
+)
+def new(name, template, use_git, yes):
+    """Initializes a new project using an interactive wizard or provided options."""
+    project.create_project(name=name, template_key=template, use_git=use_git, auto_confirm=yes)
 
 @genesis.command()
 @click.argument('name')
@@ -36,8 +53,11 @@ def build(name):
         "# Use 4-space indentation for nesting.\n"
         "# End directory names with a forward slash '/'.\n"
     )
-    if template_string is not None:
-        project.build_from_template(name, template_string)
+    if template_string is None:
+        click.echo("Build cancelled. No template was provided.")
+        return
+
+    project.build_from_template(name, template_string)
 
 
 @genesis.command()
@@ -79,11 +99,9 @@ def update():
 def self_update():
     """Checks for and applies updates to Genesis itself."""
     # KORRIGIERT
-    if self_update_module.check_for_updates():
-        self_update_module.perform_update()
-    else:
-        # You need a console object here or just use print
-        print("✅ Genesis is already up to date.")
+    has_updates, stashed_changes = self_update_module.check_for_updates()
+    if has_updates:
+        self_update_module.perform_update(stashed_changes=stashed_changes)
 
 
 @genesis.command()

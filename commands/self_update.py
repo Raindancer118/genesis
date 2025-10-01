@@ -8,6 +8,55 @@ import questionary
 console = Console()
 GENESIS_DIR = "/opt/genesis"
 
+def stash_local_changes():
+    """Stashes local changes so the updater can run on a clean tree."""
+    label = f"genesis-self-update-{int(time.time())}"
+    try:
+        subprocess.run(
+            [
+                "git",
+                "stash",
+                "push",
+                "--include-untracked",
+                "--message",
+                label,
+            ],
+            cwd=GENESIS_DIR,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        console.print("🧺 Local changes stashed temporarily for the update.")
+        return True
+    except subprocess.CalledProcessError as exc:
+        error_message = exc.stderr or exc.stdout or str(exc)
+        console.print(
+            "[bold red]Failed to stash local changes automatically.[/bold red]"
+        )
+        console.print(error_message)
+        return False
+
+
+def restore_stash():
+    """Attempts to restore the most recent stash entry."""
+    try:
+        subprocess.run(
+            ["git", "stash", "pop"],
+            cwd=GENESIS_DIR,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        console.print("♻️  Restored stashed changes.")
+    except subprocess.CalledProcessError as exc:
+        error_message = exc.stderr or exc.stdout or str(exc)
+        console.print(
+            "[bold yellow]Stashed changes were not automatically restored.[/bold yellow]"
+        )
+        console.print(
+            "Run `git stash pop` manually to recover them if needed."
+        )
+        console.print(error_message)
 
 def stash_local_changes():
     """Stashes local changes so the updater can run on a clean tree."""
@@ -61,6 +110,7 @@ def restore_stash():
 
 
 def check_for_updates(interactive=True):
+
     """Checks if updates are available and ensures the worktree is clean."""
     console.print("🔎 Checking for updates to Genesis...")
     stashed_changes = False
@@ -125,6 +175,7 @@ def check_for_updates(interactive=True):
                     "installer.[/yellow]"
                 )
 
+
         if behind_commits:
             console.print(
                 f"⬇️  Updates available: {behind_commits} new commit(s) ready to apply."
@@ -141,7 +192,6 @@ def check_for_updates(interactive=True):
         )
         console.print(f"[bold red]Error checking for updates:[/bold red]\n{error_message}")
         return False, False
-
 
 def perform_update(stashed_changes=False):
     """Performs the self-update by re-running the installer script."""

@@ -171,7 +171,6 @@ def _create_rust_scaffold(path, use_git):
     _init_git_repo(path, use_git)
     console.print(f"  ✅ [green]Created Rust project in '{path.name}'[/green]")
 
-
 def _create_java_scaffold(path, use_git):
     """Creates a minimal Java project with a simple entry point."""
     src_dir = path / "src"

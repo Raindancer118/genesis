@@ -5,6 +5,8 @@ from rich.progress import Progress  # Assuming python-rich is installed
 from rich.console import Console
 import shutil
 import questionary
+from typing import List, Tuple
+from pathlib import Path
 
 
 PACMAN_AVAILABLE = shutil.which("pacman") is not None

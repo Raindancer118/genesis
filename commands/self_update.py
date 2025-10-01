@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+
 from rich.console import Console
 
 console = Console()
@@ -31,7 +32,7 @@ class RepoStatus:
 class GitCommandError(RuntimeError):
     """Raised when a git command fails while checking for updates."""
 
-    
+
 def _run_git_command(args, *, check=True):
     """Runs a git command inside the Genesis directory."""
     return subprocess.run(

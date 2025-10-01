@@ -8,6 +8,17 @@ console = Console()
 GENESIS_DIR = "/opt/genesis"
 
 
+def _run_git(args):
+    """Helper: run git command in GENESIS_DIR and return CompletedProcess."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=GENESIS_DIR,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def check_for_updates():
     """Checks if updates are available and ensures the worktree is clean."""
     console.print("🔎 Checking for updates to Genesis...")
@@ -42,6 +53,7 @@ def check_for_updates():
             console.print(
                 "[bold yellow]Local changes detected in /opt/genesis.[/bold yellow]"
             )
+
             if behind_commits:
                 console.print(
                     "[yellow]Updates are available but cannot be applied until you commit "
@@ -67,6 +79,7 @@ def check_for_updates():
             if isinstance(exc, subprocess.CalledProcessError) and exc.stderr
             else str(exc)
         )
+
         console.print(f"[bold red]Error checking for updates:[/bold red]\n{error_message}")
         return False
 
@@ -91,4 +104,5 @@ def perform_update():
         console.print(
             f"[bold red]Update failed with exit code {exc.returncode}."
             " Review the installer output above for details.[/bold red]"
+
         )

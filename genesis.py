@@ -104,7 +104,6 @@ def self_update():
         self_update_module.perform_update(stashed_changes=stashed_changes)
 
 
-
 @genesis.command()
 def status():
     """Performs a comprehensive, AI-driven system health check."""

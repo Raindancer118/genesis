@@ -58,6 +58,56 @@ def restore_stash():
         )
         console.print(error_message)
 
+def stash_local_changes():
+    """Stashes local changes so the updater can run on a clean tree."""
+    label = f"genesis-self-update-{int(time.time())}"
+    try:
+        subprocess.run(
+            [
+                "git",
+                "stash",
+                "push",
+                "--include-untracked",
+                "--message",
+                label,
+            ],
+            cwd=GENESIS_DIR,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        console.print("🧺 Local changes stashed temporarily for the update.")
+        return True
+    except subprocess.CalledProcessError as exc:
+        error_message = exc.stderr or exc.stdout or str(exc)
+        console.print(
+            "[bold red]Failed to stash local changes automatically.[/bold red]"
+        )
+        console.print(error_message)
+        return False
+
+
+def restore_stash():
+    """Attempts to restore the most recent stash entry."""
+    try:
+        subprocess.run(
+            ["git", "stash", "pop"],
+            cwd=GENESIS_DIR,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        console.print("♻️  Restored stashed changes.")
+    except subprocess.CalledProcessError as exc:
+        error_message = exc.stderr or exc.stdout or str(exc)
+        console.print(
+            "[bold yellow]Stashed changes were not automatically restored.[/bold yellow]"
+        )
+        console.print(
+            "Run `git stash pop` manually to recover them if needed."
+        )
+        console.print(error_message)
+
 
 def check_for_updates(interactive=True):
 
@@ -120,9 +170,11 @@ def check_for_updates(interactive=True):
                     )
             else:
                 console.print(
-                    "[yellow]Please commit or stash your work before running self-update.[/yellow]"
+                    "[yellow]No remote updates are available, so your local changes "
+                    "won't be modified. You can keep working without running the "
+                    "installer.[/yellow]"
                 )
-                return False, False
+
 
         if behind_commits:
             console.print(
@@ -141,7 +193,6 @@ def check_for_updates(interactive=True):
         console.print(f"[bold red]Error checking for updates:[/bold red]\n{error_message}")
         return False, False
 
-
 def perform_update(stashed_changes=False):
     """Performs the self-update by re-running the installer script."""
     console.print("🚀 An update is available for Genesis.")
@@ -149,7 +200,6 @@ def perform_update(stashed_changes=False):
         console.print("Update cancelled.")
         if stashed_changes:
             restore_stash()
-
         return
 
     console.print("Updating... The installer will apply the changes.")

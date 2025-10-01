@@ -1,4 +1,4 @@
-#!/usr/-bin/env python3
+#!/usr/bin/env python3
 import click
 # --- KORRIGIERT: Allen potenziellen Konflikten einen Alias geben ---
 from commands import greet as greet_module

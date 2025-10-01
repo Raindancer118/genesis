@@ -12,7 +12,7 @@ try:
     if not API_KEY:
         raise ImportError
     genai.configure(api_key=API_KEY)
-    llm = genai.GenerativeModel('gemini-pro')
+    llm = genai.GenerativeModel('gemini-2.5-flash')
 except (ImportError, KeyError):
     llm = None
 

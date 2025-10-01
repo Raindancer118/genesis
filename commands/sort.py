@@ -1,119 +1,153 @@
-import os
+"""Directory sorting utilities for Genesis."""
+
+from __future__ import annotations
+
 import shutil
 import sys
-import time
+from collections import Counter
 from pathlib import Path
+from typing import Dict
 
-# (Import your content analysis libraries: pypdf, docx, Pillow)
+from .storage import storage
 
-# --- NEW: Self-Contained Styling Class (No Rich/questionary needed) ---
-class Style:
-    # ANSI escape codes for colors and styles
-    PURPLE = '\033[95m'
-    CYAN = '\033[96m'
-    BLUE = '\033[94m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    RED = '\033[91m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-    END = '\033[0m' # Reset style
+CATEGORY_RULES: Dict[str, set[str]] = {
+    "Documents": {".pdf", ".doc", ".docx", ".txt", ".md", ".odt", ".rtf"},
+    "Spreadsheets": {".xls", ".xlsx", ".ods", ".csv"},
+    "Presentations": {".ppt", ".pptx", ".key", ".odp"},
+    "Images": {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".svg", ".webp"},
+    "Audio": {".mp3", ".wav", ".flac", ".aac", ".ogg"},
+    "Video": {".mp4", ".mkv", ".mov", ".avi", ".webm"},
+    "Archives": {".zip", ".tar", ".gz", ".bz2", ".xz", ".rar", ".7z"},
+    "Code": {
+        ".py",
+        ".js",
+        ".ts",
+        ".java",
+        ".go",
+        ".rs",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+    },
+    "Installers": {".deb", ".rpm", ".pkg.tar.zst", ".msi", ".exe", ".dmg"},
+}
 
-    # Unicode box-drawing characters
-    TOP_LEFT = '┌'
-    TOP_RIGHT = '┐'
-    BOTTOM_LEFT = '└'
-    BOTTOM_RIGHT = '┘'
-    HORIZONTAL = '─'
-    VERTICAL = '│'
-
-def get_display_length(text):
-    """Calculates the visual length of a string, accounting for wide emojis."""
-    emoji_count = text.count('🔎') + text.count('🚀') + text.count('🧠')
-    return len(text) + emoji_count # Add one extra space for each emoji found
-
-def print_panel(text, color=Style.CYAN):
-    """Prints text inside a styled, self-sizing, and correctly aligned panel."""
-    clean_text = text.strip()
-    # --- The Fix is Here ---
-    content_width = get_display_length(clean_text) # Use our new helper instead of len()
-
-    padding = 4
-    bar_width = content_width + padding
-    terminal_width = shutil.get_terminal_size().columns
-
-    if bar_width >= terminal_width - 2:
-        bar_width = terminal_width - 4
-
-    top_border = f"{Style.TOP_LEFT}{Style.HORIZONTAL * bar_width}{Style.TOP_RIGHT}"
-    bottom_border = f"{Style.BOTTOM_LEFT}{Style.HORIZONTAL * bar_width}{Style.BOTTOM_RIGHT}"
-
-    # Manually construct the centered text line to ensure perfect alignment
-    padding_total = bar_width - content_width
-    left_pad = ' ' * (padding_total // 2)
-    right_pad = ' ' * (padding_total - (padding_total // 2)) # Handles odd numbers
-    text_line = f"{Style.VERTICAL}{left_pad}{clean_text}{right_pad}{Style.VERTICAL}"
-
-    print(f"\n{color}{Style.BOLD}{top_border}{Style.END}")
-    print(f"{color}{Style.BOLD}{text_line}{Style.END}")
-    print(f"{color}{Style.BOLD}{bottom_border}{Style.END}")
-
-def print_progress_bar(iteration, total, prefix='', suffix='', length=40, fill='█'):
-    """Creates and prints a terminal progress bar."""
-    percent = ("{0:.1f}").format(100 * (iteration / float(total)))
-    filled_length = int(length * iteration // total)
-    bar = fill * filled_length + '-' * (length - filled_length)
-
-    # \r is a carriage return, it moves the cursor to the beginning of the line
-    sys.stdout.write(f'\r{Style.GREEN}{prefix} |{bar}| {percent}% {suffix}{Style.END}')
-    sys.stdout.flush() # Flush the buffer to make it visible immediately
-    if iteration == total:
-        sys.stdout.write('\n') # Move to next line on completion
-
-# --- MAIN SCRIPT ---
-
-def sort_downloads():
-    # --- PHASE 1: DISCOVERY ---
-    print_panel("🔎 Phase 1: Discovery")
-    # (Discovery logic remains the same)
-    items_to_process = [item for item in Path.home().joinpath("Downloads").iterdir() if item.is_file()] # Simplified for example
-    print(f"Found {len(items_to_process)} items to sort.")
-
-    # --- PHASE 2: PREPARE DESTINATION ---
-    print_panel("🔎 Phase 2: Preparing Destination")
-    target_dir = Path.home().joinpath("Downloads", "Sorted_Output")
-    target_dir.mkdir(exist_ok=True)
-    print(f"Destination is {Style.PURPLE}'{target_dir.name}'{Style.END}")
-
-    # --- PHASE 3: SORTING ---
-    print_panel("🚀 Phase 3: Sorting")
-
-    total_items = len(items_to_process)
-    print_progress_bar(0, total_items, prefix='Progress:', suffix='Complete', length=50)
-
-    for i, item in enumerate(items_to_process):
-        # Simulate work and update progress bar
-        time.sleep(0.05)
-        print_progress_bar(i + 1, total_items, prefix='Progress:', suffix='Complete', length=50)
-
-        # --- Example of a styled interactive prompt ---
-        if item.suffix == '.jpg': # Simulate an unsure case
-            prompt = (
-                f"\n{Style.YELLOW}{Style.BOLD}🧠 My analysis suggests '{item.name}' is a 'Screenshot'.{Style.END}\n"
-                f"{Style.YELLOW}   Use this category? [Y/n]: {Style.END}"
-            )
-            # We add a newline before the input to not mess with the progress bar
-            # choice = input(prompt).lower().strip()
-            # if choice == 'y' or choice == '':
-            #     # Logic to handle user's 'yes'
-            #     pass
-
-        # Move file logic would go here
-        # shutil.move(item, target_dir / item.name)
-
-    # Final status message
-    print(f"\n{Style.BOLD}{Style.GREEN}🎉 All done!{Style.END}")
+DEFAULT_CATEGORY = "Other"
+PREFERENCE_KEY = "sort_preferences"
 
 
-if __name__ == "__main__":
-    sort_downloads()
+def sort_directory(path: str) -> None:
+    """Sorts files into category sub-directories.
+
+    Files are grouped by extension.  When Genesis encounters a new extension it
+    asks the user which category to use (if the session is interactive) and
+    persists the answer so future runs behave consistently even after
+    self-update operations.
+    """
+
+    directory = Path(path).expanduser().resolve()
+    if not directory.exists():
+        print(f"Path '{directory}' does not exist.")
+        return
+    if not directory.is_dir():
+        print(f"Path '{directory}' is not a directory.")
+        return
+
+    files = sorted(p for p in directory.iterdir() if p.is_file())
+    if not files:
+        print("Nothing to sort – the directory contains no files.")
+        return
+
+    stored_preferences: Dict[str, str] = storage.get(PREFERENCE_KEY, {})
+    # keep a working copy so we can detect changes before writing back
+    preferences = dict(stored_preferences)
+    category_counter: Counter[str] = Counter()
+
+    for file_path in files:
+        category = _determine_category(file_path, preferences)
+        destination_dir = directory / category
+        destination_dir.mkdir(exist_ok=True)
+        destination_path = _resolve_collision(destination_dir, file_path.name)
+        shutil.move(str(file_path), str(destination_path))
+        category_counter[category] += 1
+
+    if preferences != stored_preferences:
+        storage.set(PREFERENCE_KEY, preferences)
+
+    _print_summary(directory, category_counter)
+
+
+def _determine_category(file_path: Path, preferences: Dict[str, str]) -> str:
+    extension = file_path.suffix.lower()
+    name_key = f":name:{file_path.name.lower()}"
+    if extension and extension in preferences:
+        return preferences[extension]
+    if not extension and name_key in preferences:
+        return preferences[name_key]
+
+    for category, extensions in CATEGORY_RULES.items():
+        if extension in extensions:
+            return category
+
+    category = _prompt_for_category(file_path) if sys.stdin.isatty() else DEFAULT_CATEGORY
+    key = extension if extension else name_key
+    preferences[key] = category
+    return category
+
+
+def _prompt_for_category(file_path: Path) -> str:
+    available = sorted({*CATEGORY_RULES.keys(), DEFAULT_CATEGORY})
+    print(f"How should Genesis file '{file_path.name}'?")
+    for idx, category in enumerate(available, start=1):
+        print(f"  {idx}. {category}")
+    print("  0. Enter a custom category")
+
+    while True:
+        choice = input("Select a category [default: Other]: ").strip()
+        if not choice:
+            return DEFAULT_CATEGORY
+        if choice.isdigit():
+            option = int(choice)
+            if option == 0:
+                break
+            if 1 <= option <= len(available):
+                return available[option - 1]
+        else:
+            # Allow typing the category name directly
+            normalised = choice.title()
+            if normalised in available:
+                return normalised
+        print("Invalid selection. Please try again.")
+
+    custom = input("Enter a custom category name: ").strip()
+    return custom or DEFAULT_CATEGORY
+
+
+def _resolve_collision(destination_dir: Path, filename: str) -> Path:
+    destination = destination_dir / filename
+    if not destination.exists():
+        return destination
+
+    stem = Path(filename).stem
+    suffix = Path(filename).suffix
+    counter = 1
+    while True:
+        candidate = destination_dir / f"{stem} ({counter}){suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def _print_summary(directory: Path, counter: Counter[str]) -> None:
+    print(f"Sorted files in '{directory}'.")
+    for category, count in counter.most_common():
+        label = "file" if count == 1 else "files"
+        print(f"  • {category}: {count} {label}")
+
+
+__all__ = ["sort_directory"]

@@ -44,12 +44,12 @@ OFFICIAL_DEPS=(
     python-pypdf
     python-pillow
     python-psutil
-    python-google-generativeai
     clamav
 )
 AUR_DEPS=(
     python-docx
     python-questionary
+    python-google-generativeai
 )
 
 echo "-> Installing official packages with pacman..."

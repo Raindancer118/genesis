@@ -480,13 +480,15 @@ def _best_scanner() -> Tuple[str, List[str]]:
     """
     Bevorzugt 'clamdscan', wenn verfügbar & clamd läuft (viel schneller).
     Fallback: 'clamscan'.
+    JETZT GEÄNDERT: Erzwingt clamscan, um Berechtigungsprobleme im Home-Dir zu umgehen.
     """
-    clamdscan = _which("clamdscan")
-    if clamdscan and _systemctl_exists("clamav-daemon.service") or _systemctl_exists("clamd.service"):
-        return (clamdscan, ["--fdpass"])  # --fdpass erlaubt rootless scan wenn clamd root ist
+    # clamdscan = _which("clamdscan")
+    # if clamdscan and _systemctl_exists("clamav-daemon.service") or _systemctl_exists("clamd.service"):
+    #     return (clamdscan, ["--fdpass"])
     clamscan = _which("clamscan")
     if not clamscan:
         raise RuntimeError("Neither clamdscan nor clamscan found. Please install clamav.")
+    # Das Flag "-r" bedeutet "rekursiv", was für das Scannen von Verzeichnissen notwendig ist.
     return (clamscan, ["-r"])
 
 def _summarize_scan(stdout: str) -> str:

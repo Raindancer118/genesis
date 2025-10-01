@@ -1,4 +1,38 @@
 #!/usr/bin/env python3
+"""Genesis CLI entry point."""
+
+from __future__ import annotations
+
+import site
+import sys
+from pathlib import Path
+
+def _bootstrap_local_venv() -> None:
+    """Ensure the bundled virtualenv is importable without activation."""
+
+    install_dir = Path(__file__).resolve().parent
+    venv_dir = install_dir / ".venv"
+    if not venv_dir.exists():
+        return
+
+    if sys.platform == "win32":  # pragma: no cover - Windows is not primary target
+        site_packages = venv_dir / "Lib" / "site-packages"
+        if site_packages.exists():
+            site.addsitedir(str(site_packages))
+        return
+
+    lib_dir = venv_dir / "lib"
+    if not lib_dir.exists():
+        return
+
+    for path in lib_dir.iterdir():
+        candidate = path / "site-packages"
+        if candidate.exists():
+            site.addsitedir(str(candidate))
+
+
+_bootstrap_local_venv()
+
 import click
 # --- KORRIGIERT: Allen potenziellen Konflikten einen Alias geben ---
 from commands import greet as greet_module
@@ -23,9 +57,26 @@ def greet():
 
 
 @genesis.command()
-def new(project_type, name):
-    """Initializes a new project using an interactive wizard."""
-    project.run_project_wizard()
+@click.option('--name', help='Project name. Prompts if omitted.')
+@click.option(
+    '--template',
+    type=click.Choice(project.get_template_choices()),
+    help='Project template to use. Prompts if omitted.'
+)
+@click.option(
+    '--git/--no-git',
+    'use_git',
+    default=None,
+    help='Initialize a Git repository. Prompts if omitted.'
+)
+@click.option(
+    '--yes',
+    is_flag=True,
+    help='Skip the final confirmation step when enough details are provided.'
+)
+def new(name, template, use_git, yes):
+    """Initializes a new project using an interactive wizard or provided options."""
+    project.create_project(name=name, template_key=template, use_git=use_git, auto_confirm=yes)
 
 @genesis.command()
 @click.argument('name')
@@ -36,8 +87,11 @@ def build(name):
         "# Use 4-space indentation for nesting.\n"
         "# End directory names with a forward slash '/'.\n"
     )
-    if template_string is not None:
-        project.build_from_template(name, template_string)
+    if template_string is None:
+        click.echo("Build cancelled. No template was provided.")
+        return
+
+    project.build_from_template(name, template_string)
 
 
 @genesis.command()
@@ -79,11 +133,7 @@ def update():
 def self_update():
     """Checks for and applies updates to Genesis itself."""
     # KORRIGIERT
-    if self_update_module.check_for_updates():
-        self_update_module.perform_update()
-    else:
-        # You need a console object here or just use print
-        print("✅ Genesis is already up to date.")
+    self_update_module.run_self_update()
 
 
 @genesis.command()

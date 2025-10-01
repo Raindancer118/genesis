@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Dict, Tuple
@@ -322,4 +323,3 @@ def _save_memory(
 
 
 __all__ = ["sort_directory"]
-

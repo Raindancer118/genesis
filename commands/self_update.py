@@ -2,12 +2,38 @@ import subprocess
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
-
 from rich.console import Console
 
 console = Console()
 GENESIS_DIR = "/opt/genesis"
 
+def stash_local_changes():
+    """Stashes local changes so the updater can run on a clean tree."""
+    label = f"genesis-self-update-{int(time.time())}"
+    try:
+        subprocess.run(
+            [
+                "git",
+                "stash",
+                "push",
+                "--include-untracked",
+                "--message",
+                label,
+            ],
+            cwd=GENESIS_DIR,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        console.print("🧺 Local changes stashed temporarily for the update.")
+        return True
+    except subprocess.CalledProcessError as exc:
+        error_message = exc.stderr or exc.stdout or str(exc)
+        console.print(
+            "[bold red]Failed to stash local changes automatically.[/bold red]"
+        )
+        console.print(error_message)
+        return False
 
 @dataclass
 class RepoStatus:
@@ -90,15 +116,17 @@ def check_for_updates(*, interactive: bool = True) -> Tuple[bool, Dict[str, Any]
         console.print(
             f"⬇️  Updates available: {status.behind_commits} new commit(s) ready to apply."
         )
-
+        console.print(
+            "Run `git stash pop` manually to recover them if needed."
+        )
+        console.print(error_message)
     return True, {"status": status}
-
 
 def stash_local_changes():
     """Stashes local changes so the updater can run on a clean tree."""
     label = f"genesis-self-update-{int(time.time())}"
     try:
-        _run_git_command(
+      _run_git_command(
             [
                 "stash",
                 "push",
@@ -107,6 +135,19 @@ def stash_local_changes():
                 label,
             ]
         )
+        console.print(error_message)
+        return False
+
+def _run_git_command(args, *, check=True):
+    """Runs a git command inside the Genesis directory."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=GENESIS_DIR,
+        check=check,
+        capture_output=True,
+        text=True,
+    )
+
 
         stash_list = _run_git_command(["stash", "list"])
         for line in stash_list.stdout.splitlines():

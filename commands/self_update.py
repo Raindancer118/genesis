@@ -67,6 +67,7 @@ def _resolve_tracking_branch() -> Optional[str]:
 
 def _count_commits(range_expr: str) -> int:
     """Return the number of commits in the provided revision range."""
+
     try:
         result = _run_git_command(["rev-list", "--count", range_expr])
     except subprocess.CalledProcessError as exc:
@@ -133,23 +134,29 @@ def check_for_updates(*, interactive: bool = True) -> Tuple[bool, Dict[str, Any]
         console.print(
             f"⬇️  Updates available: {status.behind_commits} new commit(s) ready to apply."
         )
-        if not apply_failed:
-            console.print(
-                "[yellow]Changes were applied without dropping the stash so nothing was lost.[/yellow]"
-            )
+    except subprocess.CalledProcessError as exc:
+        error_message = exc.stderr or exc.stdout or str(exc)
+        console.print(
+            "[bold red]Failed to stash local changes automatically.[/bold red]"
+        )
+        console.print(error_message)
+
+    return None
 
 
-def run_self_update():
-    """Fully automated self-update with automatic stashing and restoration."""
+def restore_stash(stash_ref: Optional[str]):
+    """Attempts to restore the provided stash entry, if any."""
 
-    update_available, payload = check_for_updates(interactive=True)
-
-    if "error" in payload:
-        return
     return True, {"status": status}
 
-    if not update_available:
+    try:
+        _run_git_command(["stash", "pop", stash_ref])
+        console.print("♻️  Restored stashed changes.")
         return
+    except subprocess.CalledProcessError:
+        console.print(
+            "[yellow]Automatic stash pop failed. Attempting safe apply…[/yellow]"
+        )
 
 def stash_local_changes():
     """Stashes local changes so the updater can run on a clean tree."""
@@ -164,7 +171,6 @@ def stash_local_changes():
                 label,
             ]
         )
-
         stash_list = _run_git_command(["stash", "list"])
         for line in stash_list.stdout.splitlines():
             if label in line:
@@ -185,7 +191,6 @@ def stash_local_changes():
     return None
 
 
-def restore_stash(stash_ref: Optional[str]):
     """Attempts to restore the provided stash entry, if any."""
 
     if not stash_ref:
@@ -199,7 +204,6 @@ def restore_stash(stash_ref: Optional[str]):
         console.print(
             "[yellow]Automatic stash pop failed. Attempting safe apply…[/yellow]"
         )
-
     try:
         _run_git_command(["stash", "apply", stash_ref])
         console.print("♻️  Applied stashed changes.")
@@ -237,6 +241,7 @@ def run_self_update():
 
     if not update_available:
         return
+
     if status.ahead_commits:
         console.print(
             "[bold red]Local commits detected.[/bold red] Please push or back them up "

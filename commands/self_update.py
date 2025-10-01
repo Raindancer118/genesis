@@ -134,9 +134,29 @@ def check_for_updates(*, interactive: bool = True) -> Tuple[bool, Dict[str, Any]
         console.print(
             f"⬇️  Updates available: {status.behind_commits} new commit(s) ready to apply."
         )
+    except subprocess.CalledProcessError as exc:
+        error_message = exc.stderr or exc.stdout or str(exc)
+        console.print(
+            "[bold red]Failed to stash local changes automatically.[/bold red]"
+        )
+        console.print(error_message)
+
+    return None
+
+
+def restore_stash(stash_ref: Optional[str]):
+    """Attempts to restore the provided stash entry, if any."""
 
     return True, {"status": status}
 
+    try:
+        _run_git_command(["stash", "pop", stash_ref])
+        console.print("♻️  Restored stashed changes.")
+        return
+    except subprocess.CalledProcessError:
+        console.print(
+            "[yellow]Automatic stash pop failed. Attempting safe apply…[/yellow]"
+        )
 
 def stash_local_changes():
     """Stashes local changes so the updater can run on a clean tree."""
@@ -151,7 +171,6 @@ def stash_local_changes():
                 label,
             ]
         )
-
         stash_list = _run_git_command(["stash", "list"])
         for line in stash_list.stdout.splitlines():
             if label in line:
@@ -172,7 +191,6 @@ def stash_local_changes():
     return None
 
 
-def restore_stash(stash_ref: Optional[str]):
     """Attempts to restore the provided stash entry, if any."""
 
     if not stash_ref:
@@ -186,7 +204,6 @@ def restore_stash(stash_ref: Optional[str]):
         console.print(
             "[yellow]Automatic stash pop failed. Attempting safe apply…[/yellow]"
         )
-
     try:
         _run_git_command(["stash", "apply", stash_ref])
         console.print("♻️  Applied stashed changes.")

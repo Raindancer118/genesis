@@ -13,17 +13,24 @@ def check_for_updates():
         # --- KORREKTUR: 'sudo' wurde von den git-Befehlen entfernt ---
         subprocess.run(
             ['git', 'fetch'],
-            cwd=GENESIS_DIR, check=True, capture_output=True
+            cwd=GENESIS_DIR,
+            check=True,
+            capture_output=True,
+            text=True,
         )
 
         status_result = subprocess.run(
             ['git', 'status', '-uno'],
-            cwd=GENESIS_DIR, check=True, capture_output=True, text=True
+            cwd=GENESIS_DIR,
+            check=True,
+            capture_output=True,
+            text=True,
         )
 
         return "Your branch is behind" in status_result.stdout
     except subprocess.CalledProcessError as e:
-        console.print(f"[bold red]Error checking for updates:[/bold red]\n{e.stderr.decode()}")
+        error_message = e.stderr if isinstance(e.stderr, str) else (e.stderr.decode() if e.stderr else str(e))
+        console.print(f"[bold red]Error checking for updates:[/bold red]\n{error_message}")
         return False
 
 

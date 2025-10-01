@@ -8,7 +8,6 @@ import questionary
 console = Console()
 GENESIS_DIR = "/opt/genesis"
 
-
 def stash_local_changes():
     """Stashes local changes so the updater can run on a clean tree."""
     label = f"genesis-self-update-{int(time.time())}"
@@ -61,6 +60,7 @@ def restore_stash():
 
 
 def check_for_updates(interactive=True):
+
     """Checks if updates are available and ensures the worktree is clean."""
     console.print("🔎 Checking for updates to Genesis...")
     stashed_changes = False
@@ -149,6 +149,7 @@ def perform_update(stashed_changes=False):
         console.print("Update cancelled.")
         if stashed_changes:
             restore_stash()
+
         return
 
     console.print("Updating... The installer will apply the changes.")

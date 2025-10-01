@@ -1,65 +1,125 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-# --- 1. Sudo-Erzwingung ---
-# Stellt sicher, dass das Skript als root läuft und $SUDO_USER gesetzt ist.
-if [ "$EUID" -ne 0 ]; then
-  echo "🚀 Sudo-Rechte erforderlich. Starte Skript neu mit sudo..."
-  # %q sorgt für sicheres Quoting von Pfad und Argumenten
-  sudo bash -c "$(printf "%q " "$0" "$@")"
-  exit 0 # Beendet das ursprüngliche Skript ohne sudo
+# -------------------------------
+# 0) Must run as root
+# -------------------------------
+if [[ "${EUID}" -ne 0 ]]; then
+  echo "🚀 Sudo-Rechte erforderlich. Starte Skript neu mit sudo…"
+  exec sudo --preserve-env=PATH,BASH_ENV "$0" "$@"
 fi
-# Ab hier läuft das Skript garantiert als root.
-
 echo "🚀 Installing/Updating Genesis (as root)..."
 
-# --- Konfiguration ---
+# -------------------------------
+# 1) Resolve target user
+# -------------------------------
+SUDO_USER_REAL="${SUDO_USER:-}"
+if [[ -z "${SUDO_USER_REAL}" || "${SUDO_USER_REAL}" == "root" ]]; then
+  # Best effort fallback: aktiver TTY-User
+  SUDO_USER_REAL="$(logname 2>/dev/null || true)"
+fi
+if [[ -z "${SUDO_USER_REAL}" || "${SUDO_USER_REAL}" == "root" ]]; then
+  echo "❌ Konnte Zielnutzer nicht ermitteln (SUDO_USER/logname)."
+  echo "   Bitte mit 'sudo -u <user> sudo ./install.sh' ausführen."
+  exit 1
+fi
+echo "➡️  Zielnutzer: ${SUDO_USER_REAL}"
+USER_UID="$(id -u "${SUDO_USER_REAL}")"
+
+# -------------------------------
+# 2) Config
+# -------------------------------
 REPO_URL="git@github.com:Raindancer118/genesis.git"
 INSTALL_DIR="/opt/genesis"
 BIN_DIR="/usr/local/bin"
 APP_NAME="genesis"
 
-# --- 2. Git Repository aktualisieren ---
-if [ ! -d "$INSTALL_DIR" ]; then
-    echo "Performing first-time install of Genesis from Git..."
-    sudo -u "$SUDO_USER" git clone "$REPO_URL" "$INSTALL_DIR"
+# -------------------------------
+# 3) Clone / Pull als User
+# -------------------------------
+if [[ ! -d "${INSTALL_DIR}" ]]; then
+  echo "📦 First-time clone nach ${INSTALL_DIR}…"
+  sudo -u "${SUDO_USER_REAL}" git clone "${REPO_URL}" "${INSTALL_DIR}"
+fi
+cd "${INSTALL_DIR}"
+echo "🔄 Pulling updates als '${SUDO_USER_REAL}'…"
+sudo -u "${SUDO_USER_REAL}" git pull --ff-only origin main
+
+# -------------------------------
+# 4) Dependencies
+# -------------------------------
+echo "🧩 Checking dependencies…"
+ALL_DEPS=(
+  python-click python-rich python-pypdf python-pillow python-psutil
+  clamav python-docx python-questionary python-google-generativeai
+)
+
+if command -v pamac >/dev/null 2>&1; then
+  echo "→ Install via pamac"
+  # pamac läuft ohne root und nutzt polkit; --no-confirm vermeidet Prompts
+  sudo -u "${SUDO_USER_REAL}" pamac install --no-confirm --needed "${ALL_DEPS[@]}" || true
+elif command -v pacman >/dev/null 2>&1; then
+  echo "→ Install via pacman"
+  pacman -Sy --noconfirm "${ALL_DEPS[@]}" || true
+else
+  echo "⚠️ Weder pamac noch pacman verfügbar. Überspringe Paketinstallation."
 fi
 
-cd "$INSTALL_DIR"
-echo "Pulling updates as user '$SUDO_USER'..."
-sudo -u "$SUDO_USER" git pull origin main
+# -------------------------------
+# 5) Symlink anlegen
+# -------------------------------
+echo "🔗 Creating system-wide command link…"
+chmod +x "${INSTALL_DIR}/genesis.py"
+ln -sf "${INSTALL_DIR}/genesis.py" "${BIN_DIR}/${APP_NAME}"
 
-# --- 3. Abhängigkeiten installieren ---
-echo "Checking dependencies as user '$SUDO_USER'..."
-ALL_DEPS=(
-    python-click python-rich python-pypdf python-pillow python-psutil
-    clamav python-docx python-questionary python-google-generativeai
-)
-# pamac muss als der Benutzer ausgeführt werden, um auf den D-Bus zugreifen zu können
-sudo -u "$SUDO_USER" pamac install --no-confirm --needed "${ALL_DEPS[@]}"
+# -------------------------------
+# 6) systemd USER units zuverlässig aktivieren
+#    (Fix für: DBUS_SESSION_BUS_ADDRESS / XDG_RUNTIME_DIR)
+# -------------------------------
+echo "🛠️  Preparing systemd user environment…"
+# Linger erlaubt einen User-Manager ohne aktive Login-Session
+loginctl enable-linger "${SUDO_USER_REAL}" >/dev/null 2>&1 || true
 
-# --- 4. System-Links erstellen ---
-echo "Creating system-wide command link..."
-chmod +x genesis.py
-ln -sf "$INSTALL_DIR/genesis.py" "$BIN_DIR/$APP_NAME"
+# Laufzeitverzeichnis und Bus-Var setzen (existieren ggf. erst nach Linger)
+XRD="/run/user/${USER_UID}"
+DBUS_ADDR="unix:path=${XRD}/bus"
 
-# --- 5. Systemd User Services einrichten ---
-echo "Setting up systemd user services as user '$SUDO_USER'..."
-sudo -u "$SUDO_USER" bash -c '
-    set -e
-    USER_SERVICE_DIR="$HOME/.config/systemd/user"
-    mkdir -p "$USER_SERVICE_DIR"
-    cp /opt/genesis/genesis-greet.service "$USER_SERVICE_DIR/"
-    cp /opt/genesis/genesis-sentry.service "$USER_SERVICE_DIR/"
-    cp /opt/genesis/genesis-sentry.timer "$USER_SERVICE_DIR/"
+# Falls das runtime dir nicht existiert, kurz anstoßen
+if [[ ! -d "${XRD}" ]]; then
+  # Start a minimal user scope to make /run/user/$UID appear
+  sudo -u "${SUDO_USER_REAL}" systemd-run --user --scope true >/dev/null 2>&1 || true
+  sleep 0.5
+fi
 
-    systemctl --user daemon-reload
-    systemctl --user enable --now genesis-greet.service
-    systemctl --user enable --now genesis-sentry.timer
-'
+# Jetzt die User-Units deployen + aktivieren mit korrekten Env-Variablen
+echo "⚙️  Deploy user services…"
+sudo -u "${SUDO_USER_REAL}" mkdir -p "/home/${SUDO_USER_REAL}/.config/systemd/user"
+sudo -u "${SUDO_USER_REAL}" cp -f \
+  "${INSTALL_DIR}/genesis-greet.service" \
+  "${INSTALL_DIR}/genesis-sentry.service" \
+  "${INSTALL_DIR}/genesis-sentry.timer" \
+  "/home/${SUDO_USER_REAL}/.config/systemd/user/"
 
-# --- 6. Berechtigungen korrigieren ---
-echo "Setting correct ownership for $INSTALL_DIR..."
-chown -R "$SUDO_USER":"$SUDO_USER" "$INSTALL_DIR"
+# Daemon-Reload & Enable/Start (mit expliziten Env-Variablen)
+sudo -u "${SUDO_USER_REAL}" \
+  XDG_RUNTIME_DIR="${XRD}" \
+  DBUS_SESSION_BUS_ADDRESS="${DBUS_ADDR}" \
+  systemctl --user daemon-reload
+
+sudo -u "${SUDO_USER_REAL}" \
+  XDG_RUNTIME_DIR="${XRD}" \
+  DBUS_SESSION_BUS_ADDRESS="${DBUS_ADDR}" \
+  systemctl --user enable --now genesis-greet.service
+
+sudo -u "${SUDO_USER_REAL}" \
+  XDG_RUNTIME_DIR="${XRD}" \
+  DBUS_SESSION_BUS_ADDRESS="${DBUS_ADDR}" \
+  systemctl --user enable --now genesis-sentry.timer
+
+# -------------------------------
+# 7) Ownership fix
+# -------------------------------
+echo "🔒 Fix ownership…"
+chown -R "${SUDO_USER_REAL}:${SUDO_USER_REAL}" "${INSTALL_DIR}"
 
 echo "✅ Genesis installation complete."

@@ -1,6 +1,6 @@
-import os
 import subprocess
 from datetime import datetime
+from getpass import getuser
 from rich.console import Console
 from rich.panel import Panel
 from . import self_update  # Use relative import
@@ -9,7 +9,7 @@ console = Console()
 
 
 def say_good_morning():
-    user = os.getlogin().capitalize()
+    user = getuser().capitalize()
     now = datetime.now()
 
     greeting = "Good morning"
@@ -30,8 +30,11 @@ def say_good_morning():
         update_message = "[yellow]Could not check for system updates.[/yellow]"
 
     # --- Smart feature: Check for Genesis self-updates ---
-    genesis_update_available = self_update.check_for_updates()
-    genesis_status = "💡 [bold yellow]Update available! Run 'genesis self-update'[/bold yellow]" if genesis_update_available else "Genesis is up to date. ✅"
+    genesis_update_available, _ = self_update.check_for_updates(interactive=False)
+    if genesis_update_available:
+        genesis_status = "💡 [bold yellow]Update available! Run 'genesis self-update'[/bold yellow]"
+    else:
+        genesis_status = "Genesis is up to date. ✅"
 
     # --- CORRECTED LINE ---
     # The panel_text now uses the correct 'update_message' variable

@@ -49,20 +49,48 @@ sudo -u "${SUDO_USER_REAL}" git pull --ff-only origin main
 # 4) Dependencies
 # -------------------------------
 echo "🧩 Checking dependencies…"
-ALL_DEPS=(
-  python-click python-rich python-pypdf python-pillow python-psutil
-  clamav python-docx python-questionary python-google-generativeai
-)
+ARCH_PACKAGES=(python python-pip python-virtualenv git clamav maven jdk-openjdk)
+DEBIAN_PACKAGES=(python3 python3-pip python3-venv git clamav maven default-jdk)
+PYTHON_PACKAGES=(click rich pypdf pillow psutil python-docx questionary google-generativeai)
 
 if command -v pamac >/dev/null 2>&1; then
   echo "→ Install via pamac"
-  # pamac läuft ohne root und nutzt polkit; --no-confirm vermeidet Prompts
-  sudo -u "${SUDO_USER_REAL}" pamac install --no-confirm --needed "${ALL_DEPS[@]}" || true
+  sudo -u "${SUDO_USER_REAL}" pamac install --no-confirm --needed "${ARCH_PACKAGES[@]}" || true
 elif command -v pacman >/dev/null 2>&1; then
   echo "→ Install via pacman"
-  pacman -Sy --noconfirm "${ALL_DEPS[@]}" || true
+  pacman -Sy --noconfirm --needed "${ARCH_PACKAGES[@]}" || true
+elif command -v apt-get >/dev/null 2>&1 || command -v apt >/dev/null 2>&1; then
+  echo "→ Install via apt"
+  APT_BIN="$(command -v apt-get || command -v apt)"
+  "${APT_BIN}" update
+  "${APT_BIN}" install -y "${DEBIAN_PACKAGES[@]}"
 else
-  echo "⚠️ Weder pamac noch pacman verfügbar. Überspringe Paketinstallation."
+  echo "⚠️ Kein unterstützter Paketmanager gefunden. Bitte Abhängigkeiten manuell installieren."
+fi
+
+PYTHON_EXEC="$(command -v python3 || command -v python || true)"
+VENV_DIR="${INSTALL_DIR}/.venv"
+if [[ -n "${PYTHON_EXEC}" ]]; then
+  echo "🧪 Preparing Python virtual environment…"
+  if [[ -d "${VENV_DIR}" ]]; then
+    sudo -u "${SUDO_USER_REAL}" "${PYTHON_EXEC}" -m venv --upgrade "${VENV_DIR}" \
+      || echo "⚠️  Konnte bestehendes Virtualenv nicht aktualisieren."
+  else
+    sudo -u "${SUDO_USER_REAL}" "${PYTHON_EXEC}" -m venv "${VENV_DIR}" \
+      || echo "⚠️  Konnte Virtualenv nicht erstellen."
+  fi
+
+  VENV_PIP="${VENV_DIR}/bin/pip"
+  if [[ -x "${VENV_PIP}" ]]; then
+    sudo -u "${SUDO_USER_REAL}" "${VENV_PIP}" install --upgrade pip \
+      || echo "⚠️  Pip-Upgrade im Virtualenv fehlgeschlagen."
+    sudo -u "${SUDO_USER_REAL}" "${VENV_PIP}" install --upgrade "${PYTHON_PACKAGES[@]}" \
+      || echo "⚠️  Python-Abhängigkeiten konnten nicht vollständig installiert werden."
+  else
+    echo "⚠️  Virtualenv wurde erstellt, aber pip fehlt. Bitte prüfen Sie die Python-Installation."
+  fi
+else
+  echo "⚠️ Keine Python-Laufzeit gefunden. Bitte Python 3 installieren."
 fi
 
 # -------------------------------

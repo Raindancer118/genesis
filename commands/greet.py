@@ -30,8 +30,12 @@ def say_good_morning():
         update_message = "[yellow]Could not check for system updates.[/yellow]"
 
     # --- Smart feature: Check for Genesis self-updates ---
-    genesis_update_available, _ = self_update.check_for_updates(interactive=False)
-    if genesis_update_available:
+    genesis_update_available, update_payload = self_update.check_for_updates(
+        interactive=False
+    )
+    if update_payload.get("error"):
+        genesis_status = "[yellow]Unable to check for Genesis updates right now.[/yellow]"
+    elif genesis_update_available:
         genesis_status = "💡 [bold yellow]Update available! Run 'genesis self-update'[/bold yellow]"
     else:
         genesis_status = "Genesis is up to date. ✅"

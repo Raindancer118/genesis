@@ -49,20 +49,34 @@ sudo -u "${SUDO_USER_REAL}" git pull --ff-only origin main
 # 4) Dependencies
 # -------------------------------
 echo "🧩 Checking dependencies…"
-ALL_DEPS=(
-  python-click python-rich python-pypdf python-pillow python-psutil
-  clamav python-docx python-questionary python-google-generativeai
-)
+ARCH_PACKAGES=(python-pip git clamav maven jdk-openjdk)
+DEBIAN_PACKAGES=(python3 python3-pip git clamav maven default-jdk)
+PYTHON_PACKAGES=(click rich pypdf pillow psutil python-docx questionary google-generativeai)
 
 if command -v pamac >/dev/null 2>&1; then
   echo "→ Install via pamac"
-  # pamac läuft ohne root und nutzt polkit; --no-confirm vermeidet Prompts
-  sudo -u "${SUDO_USER_REAL}" pamac install --no-confirm --needed "${ALL_DEPS[@]}" || true
+  sudo -u "${SUDO_USER_REAL}" pamac install --no-confirm --needed "${ARCH_PACKAGES[@]}" || true
 elif command -v pacman >/dev/null 2>&1; then
   echo "→ Install via pacman"
-  pacman -Sy --noconfirm "${ALL_DEPS[@]}" || true
+  pacman -Sy --noconfirm --needed "${ARCH_PACKAGES[@]}" || true
+elif command -v apt-get >/dev/null 2>&1 || command -v apt >/dev/null 2>&1; then
+  echo "→ Install via apt"
+  APT_BIN="$(command -v apt-get || command -v apt)"
+  "${APT_BIN}" update
+  "${APT_BIN}" install -y "${DEBIAN_PACKAGES[@]}"
 else
-  echo "⚠️ Weder pamac noch pacman verfügbar. Überspringe Paketinstallation."
+  echo "⚠️ Kein unterstützter Paketmanager gefunden. Bitte Abhängigkeiten manuell installieren."
+fi
+
+PYTHON_EXEC="$(command -v python3 || command -v python || true)"
+if [[ -n "${PYTHON_EXEC}" ]]; then
+  echo "🧪 Installing Python modules via pip…"
+  sudo -u "${SUDO_USER_REAL}" "${PYTHON_EXEC}" -m pip install --user --upgrade pip \
+    || echo "⚠️  Pip-Upgrade fehlgeschlagen, bitte manuell prüfen."
+  sudo -u "${SUDO_USER_REAL}" "${PYTHON_EXEC}" -m pip install --user --upgrade "${PYTHON_PACKAGES[@]}" \
+    || echo "⚠️  Python-Abhängigkeiten konnten nicht vollständig installiert werden."
+else
+  echo "⚠️ Keine Python-Laufzeit gefunden. Bitte Python 3 installieren."
 fi
 
 # -------------------------------

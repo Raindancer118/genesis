@@ -1,5 +1,7 @@
 import subprocess
+
 from rich.console import Console
+
 import questionary
 
 console = Console()
@@ -18,27 +20,40 @@ def _run_git(args):
 
 
 def check_for_updates():
-    """Prüft, ob Updates verfügbar sind und ob die Working-Tree sauber ist.
-    Rückgabe:
-      True  -> Updates verfügbar und Working-Tree sauber
-      False -> keine Updates ODER lokale Änderungen blockieren Update ODER Fehler
-    """
+    """Checks if updates are available and ensures the worktree is clean."""
     console.print("🔎 Checking for updates to Genesis...")
     try:
-        # Remote-Infos aktualisieren (inkl. Entfernen verwaister Branch-Refs)
-        _run_git(["fetch", "--prune"])
+        subprocess.run(
+            ["git", "fetch", "--prune"],
+            cwd=GENESIS_DIR,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
-        # Prüfen, ob lokale Änderungen vorliegen
-        porcelain_result = _run_git(["status", "--porcelain"])
+        porcelain_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=GENESIS_DIR,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         is_dirty = porcelain_result.stdout.strip() != ""
 
-        # Wieviele Commits ist HEAD hinter origin/main?
-        behind_result = _run_git(["rev-list", "--count", "HEAD..origin/main"])
-        behind_commits_str = behind_result.stdout.strip()
-        behind_commits = int(behind_commits_str) if behind_commits_str else 0
+        behind_result = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD..origin/main"],
+            cwd=GENESIS_DIR,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        behind_commits = int(behind_result.stdout.strip() or "0")
 
         if is_dirty:
-            console.print("[bold yellow]Local changes detected in /opt/genesis.[/bold yellow]")
+            console.print(
+                "[bold yellow]Local changes detected in /opt/genesis.[/bold yellow]"
+            )
+
             if behind_commits:
                 console.print(
                     "[yellow]Updates are available but cannot be applied until you commit "
@@ -51,24 +66,26 @@ def check_for_updates():
             return False
 
         if behind_commits:
-            console.print(f"⬇️  Updates available: {behind_commits} new commit(s) ready to apply.")
+            console.print(
+                f"⬇️  Updates available: {behind_commits} new commit(s) ready to apply."
+            )
             return True
 
         console.print("✅ Genesis is already up to date.")
         return False
-
     except (subprocess.CalledProcessError, ValueError) as exc:
-        if isinstance(exc, subprocess.CalledProcessError):
-            stderr = exc.stderr or ""
-            error_message = stderr if stderr else str(exc)
-        else:
-            error_message = str(exc)
+        error_message = (
+            exc.stderr
+            if isinstance(exc, subprocess.CalledProcessError) and exc.stderr
+            else str(exc)
+        )
+
         console.print(f"[bold red]Error checking for updates:[/bold red]\n{error_message}")
         return False
 
 
 def perform_update():
-    """Führt das Self-Update aus, indem der Installer erneut aufgerufen wird."""
+    """Performs the self-update by re-running the installer script."""
     console.print("🚀 An update is available for Genesis.")
     if not questionary.confirm("Do you want to install it now?").ask():
         console.print("Update cancelled.")
@@ -80,11 +97,12 @@ def perform_update():
         console.print("✅ Update completed successfully.")
     except FileNotFoundError:
         console.print(
-            f"[bold red]Installer not found at {GENESIS_DIR}/install.sh. "
-            "Please verify your installation.[/bold red]"
+            f"[bold red]Installer not found at {GENESIS_DIR}/install.sh."
+            " Please verify your installation.[/bold red]"
         )
     except subprocess.CalledProcessError as exc:
         console.print(
-            f"[bold red]Update failed with exit code {exc.returncode}. "
-            "Review the installer output above for details.[/bold red]"
+            f"[bold red]Update failed with exit code {exc.returncode}."
+            " Review the installer output above for details.[/bold red]"
+
         )

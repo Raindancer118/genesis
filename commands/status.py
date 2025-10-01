@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import psutil
 from rich.console import Console
@@ -45,11 +46,40 @@ def get_system_metrics():
     metrics['Battery (%)'] = battery.percent if battery else 'N/A'
 
     # Software & OS
-    try:
-        updates = subprocess.check_output(['checkupdates'], text=True, stderr=subprocess.DEVNULL).strip().split('\n')
-        metrics['Pending Updates'] = len(updates) if updates[0] else 0
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        metrics['Pending Updates'] = 0
+    pending_updates = 0
+    if shutil.which('checkupdates'):
+        try:
+            updates = subprocess.check_output(
+                ['checkupdates'], text=True, stderr=subprocess.DEVNULL
+            ).strip().split('\n')
+            pending_updates = len([line for line in updates if line])
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pending_updates = 0
+    elif shutil.which('apt'):
+        try:
+            result = subprocess.check_output(
+                ['apt', 'list', '--upgradable'], text=True, stderr=subprocess.DEVNULL
+            )
+            pending_updates = len(
+                [
+                    line
+                    for line in result.splitlines()
+                    if line and not line.startswith('Listing...')
+                ]
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pending_updates = 0
+    elif shutil.which('apt-get'):
+        try:
+            result = subprocess.check_output(
+                ['apt-get', '-s', 'upgrade'], text=True, stderr=subprocess.DEVNULL
+            )
+            pending_updates = len(
+                [line for line in result.splitlines() if line.startswith('Inst ')]
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pending_updates = 0
+    metrics['Pending Updates'] = pending_updates
 
     try:
         failed_services = subprocess.check_output(['systemctl', '--failed', '--no-legend'], text=True).strip()

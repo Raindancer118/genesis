@@ -67,7 +67,6 @@ def _resolve_tracking_branch() -> Optional[str]:
 
 def _count_commits(range_expr: str) -> int:
     """Return the number of commits in the provided revision range."""
-
     try:
         result = _run_git_command(["rev-list", "--count", range_expr])
     except subprocess.CalledProcessError as exc:
@@ -134,9 +133,23 @@ def check_for_updates(*, interactive: bool = True) -> Tuple[bool, Dict[str, Any]
         console.print(
             f"⬇️  Updates available: {status.behind_commits} new commit(s) ready to apply."
         )
+        if not apply_failed:
+            console.print(
+                "[yellow]Changes were applied without dropping the stash so nothing was lost.[/yellow]"
+            )
 
+
+def run_self_update():
+    """Fully automated self-update with automatic stashing and restoration."""
+
+    update_available, payload = check_for_updates(interactive=True)
+
+    if "error" in payload:
+        return
     return True, {"status": status}
 
+    if not update_available:
+        return
 
 def stash_local_changes():
     """Stashes local changes so the updater can run on a clean tree."""
@@ -181,29 +194,33 @@ def restore_stash(stash_ref: Optional[str]):
     try:
         _run_git_command(["stash", "pop", stash_ref])
         console.print("♻️  Restored stashed changes.")
+        return
     except subprocess.CalledProcessError:
-        # Attempt a non-destructive apply so the user does not lose work.
-        apply_failed = False
-        try:
-            _run_git_command(["stash", "apply", stash_ref])
-        except subprocess.CalledProcessError as exc:
-            apply_failed = True
-            error_message = exc.stderr or exc.stdout or str(exc)
-            console.print(error_message)
+        console.print(
+            "[yellow]Automatic stash pop failed. Attempting safe apply…[/yellow]"
+        )
 
+    try:
+        _run_git_command(["stash", "apply", stash_ref])
+        console.print("♻️  Applied stashed changes.")
+    except subprocess.CalledProcessError as exc:
+        error_message = exc.stderr or exc.stdout or str(exc)
+        console.print("[bold red]Automatic restoration of stashed changes failed.[/bold red]")
+        console.print(error_message)
         console.print(
-            "[bold yellow]Stashed changes were not automatically restored.[/bold yellow]"
+            f"[yellow]Stash entry preserved as {stash_ref} for manual recovery if needed.[/yellow]"
         )
-        command_hint = "git stash pop"
-        if stash_ref:
-            command_hint += f" {stash_ref}"
+        return
+
+    try:
+        _run_git_command(["stash", "drop", stash_ref])
+        console.print("🧹  Cleaned up temporary stash entry.")
+    except subprocess.CalledProcessError as exc:
+        error_message = exc.stderr or exc.stdout or str(exc)
         console.print(
-            f"Run `{command_hint}` manually to recover them if needed."
+            "[yellow]Applied changes but could not drop the temporary stash entry automatically.[/yellow]"
         )
-        if not apply_failed:
-            console.print(
-                "[yellow]Changes were applied without dropping the stash so nothing was lost.[/yellow]"
-            )
+        console.print(error_message)
 
 
 def run_self_update():
@@ -220,7 +237,6 @@ def run_self_update():
 
     if not update_available:
         return
-
     if status.ahead_commits:
         console.print(
             "[bold red]Local commits detected.[/bold red] Please push or back them up "

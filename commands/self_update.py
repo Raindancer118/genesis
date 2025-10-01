@@ -1,11 +1,87 @@
 import subprocess
 import time
-
 from rich.console import Console
 
 console = Console()
 GENESIS_DIR = "/opt/genesis"
 
+def stash_local_changes():
+    """Stashes local changes so the updater can run on a clean tree."""
+    label = f"genesis-self-update-{int(time.time())}"
+    try:
+        subprocess.run(
+            [
+                "git",
+                "stash",
+                "push",
+                "--include-untracked",
+                "--message",
+                label,
+            ],
+            cwd=GENESIS_DIR,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        console.print("🧺 Local changes stashed temporarily for the update.")
+        return True
+    except subprocess.CalledProcessError as exc:
+        error_message = exc.stderr or exc.stdout or str(exc)
+        console.print(
+            "[bold red]Failed to stash local changes automatically.[/bold red]"
+        )
+        console.print(error_message)
+        return False
+
+
+def restore_stash():
+    """Attempts to restore the most recent stash entry."""
+    try:
+        subprocess.run(
+            ["git", "stash", "pop"],
+            cwd=GENESIS_DIR,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        console.print("♻️  Restored stashed changes.")
+    except subprocess.CalledProcessError as exc:
+        error_message = exc.stderr or exc.stdout or str(exc)
+        console.print(
+            "[bold yellow]Stashed changes were not automatically restored.[/bold yellow]"
+        )
+        console.print(
+            "Run `git stash pop` manually to recover them if needed."
+        )
+        console.print(error_message)
+
+def stash_local_changes():
+    """Stashes local changes so the updater can run on a clean tree."""
+    label = f"genesis-self-update-{int(time.time())}"
+    try:
+        subprocess.run(
+            [
+                "git",
+                "stash",
+                "push",
+                "--include-untracked",
+                "--message",
+                label,
+            ],
+            cwd=GENESIS_DIR,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        console.print("🧺 Local changes stashed temporarily for the update.")
+        return True
+    except subprocess.CalledProcessError as exc:
+        error_message = exc.stderr or exc.stdout or str(exc)
+        console.print(
+            "[bold red]Failed to stash local changes automatically.[/bold red]"
+        )
+        console.print(error_message)
+        return False
 
 def _run_git_command(args, *, check=True):
     """Runs a git command inside the Genesis directory."""
@@ -41,7 +117,6 @@ def stash_local_changes():
         console.print(error_message)
         return False
 
-
 def restore_stash():
     """Attempts to restore the most recent stash entry."""
     try:
@@ -70,14 +145,12 @@ def run_self_update():
             f"[bold red]Unable to contact the remote repository:[/bold red]\n{error_message}"
         )
         return
-
     try:
         porcelain_result = _run_git_command(["status", "--porcelain"])
         is_dirty = porcelain_result.stdout.strip() != ""
 
         behind_result = _run_git_command(["rev-list", "--count", "HEAD..origin/main"])
         behind_commits = int(behind_result.stdout.strip() or "0")
-
         ahead_result = _run_git_command(["rev-list", "--count", "origin/main..HEAD"])
         ahead_commits = int(ahead_result.stdout.strip() or "0")
     except (subprocess.CalledProcessError, ValueError) as exc:

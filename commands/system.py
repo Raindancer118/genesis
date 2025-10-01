@@ -3,6 +3,7 @@ import os
 from . import self_update
 from rich.progress import Progress  # Assuming python-rich is installed
 from rich.console import Console
+import shutil
 import questionary
 
 console = Console()
@@ -99,23 +100,35 @@ def remove_packages(packages):
         console.print("Removal cancelled.")
 
 
+# --- UPDATED update_system FUNCTION ---
 def update_system():
-    """Performs a full system update using pamac."""
-    """Performs a full system update and checks for Genesis updates."""
-    # --- NEW: Check for self-update first ---
-    if self_update.check_for_updates():
-        self_update.perform_update()
-        console.print("---")  # Separator
+    """Performs a full system update (Official Repos, AUR, Flatpak, Snap)."""
+    console.print("🚀 Starting comprehensive system update...")
 
-    console.print("🚀 Starting full system update (Official Repos + AUR)...")
-    console.print("Pamac will handle the process. You may be prompted for your password.")
-
-    if questionary.confirm("Proceed with system update?").ask():
-        # pamac upgrade handles everything
-        _run_command(['pamac', 'upgrade'])
-        console.print("\n✅ System update process complete.")
-    else:
+    if not questionary.confirm("Proceed with full system update?").ask():
         console.print("Update cancelled.")
+        return
+
+    # 1. Pamac for Arch Repos & AUR
+    console.print("\n--- [bold cyan]Updating Pacman/AUR packages with Pamac[/bold cyan] ---")
+    _run_command(['pamac', 'upgrade'])
+
+    # 2. Check for and update Flatpaks
+    if shutil.which('flatpak'):
+        console.print("\n--- [bold cyan]Updating Flatpak packages[/bold cyan] ---")
+        # The '-y' flag automatically answers 'yes' to prompts
+        _run_command(['flatpak', 'update', '-y'])
+    else:
+        console.print("\n[dim]Flatpak not found, skipping.[/dim]")
+
+    # 3. Check for and update Snaps
+    if shutil.which('snap'):
+        console.print("\n--- [bold cyan]Updating Snap packages[/bold cyan] ---")
+        _run_command(['sudo', 'snap', 'refresh'])
+    else:
+        console.print("\n[dim]Snap not found, skipping.[/dim]")
+
+    console.print("\n✅ Full system update process complete.")
 
 
 def scan_directory(path):

@@ -67,7 +67,6 @@ def _resolve_tracking_branch() -> Optional[str]:
 
 def _count_commits(range_expr: str) -> int:
     """Return the number of commits in the provided revision range."""
-
     try:
         result = _run_git_command(["rev-list", "--count", range_expr])
     except subprocess.CalledProcessError as exc:
@@ -134,9 +133,23 @@ def check_for_updates(*, interactive: bool = True) -> Tuple[bool, Dict[str, Any]
         console.print(
             f"⬇️  Updates available: {status.behind_commits} new commit(s) ready to apply."
         )
+        if not apply_failed:
+            console.print(
+                "[yellow]Changes were applied without dropping the stash so nothing was lost.[/yellow]"
+            )
 
+
+def run_self_update():
+    """Fully automated self-update with automatic stashing and restoration."""
+
+    update_available, payload = check_for_updates(interactive=True)
+
+    if "error" in payload:
+        return
     return True, {"status": status}
 
+    if not update_available:
+        return
 
 def stash_local_changes():
     """Stashes local changes so the updater can run on a clean tree."""
@@ -224,7 +237,6 @@ def run_self_update():
 
     if not update_available:
         return
-
     if status.ahead_commits:
         console.print(
             "[bold red]Local commits detected.[/bold red] Please push or back them up "

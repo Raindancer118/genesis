@@ -1,45 +1,23 @@
 #!/usr/bin/env python3
 import click
-from commands import greet, project, sort, system, status, self_update
-from rich.console import Console
+# --- CHANGE 1: Rename the imported 'greet' module ---
+from commands import greet as greet_module, project, sort, system, self_update, status
 
 
 @click.group()
 def genesis():
-    """Genesis is your personal command-line assistant for Manjaro.
-
-    It helps with sorting files, creating projects, system maintenance,
-    and more, all with a beautiful, modern interface.
-    """
+    """Genesis is your personal command-line assistant for Manjaro."""
     pass
 
-@genesis.command()
-@click.argument('packages', nargs=-1, required=True) # Allow multiple packages
-def install(packages):
-    """Finds and installs package(s) using the best available manager."""
-    system.install_packages(packages)
-
-@genesis.command()
-@click.argument('packages', nargs=-1, required=True)
-def remove(packages):
-    """Finds and removes installed package(s)."""
-    system.remove_packages(packages)
-
-@genesis.command()
-def update():
-    """Performs a full system update (official repos + AUR)."""
-    system.update_system()
 
 @genesis.command()
 def greet():
     """Displays a custom morning greeting."""
-    greet.say_good_morning()
+    # --- CHANGE 2: Call the function on the renamed module ---
+    greet_module.say_good_morning()
 
-@genesis.command()
-def status():
-    """Performs a comprehensive, AI-driven system health check."""
-    status.run_health_check()
 
+# (The rest of your commands remain exactly the same)
 @genesis.command()
 @click.argument('project_type')
 @click.argument('name')
@@ -76,27 +54,44 @@ def scan(path):
 
 
 @genesis.command()
-@click.argument('package', nargs=-1)
-def install(package):
+@click.argument('packages', nargs=-1, required=True)
+def install(packages):
     """Finds and installs package(s) using pacman or pamac (AUR)."""
-    if not package:
-        click.echo("Please specify at least one package to install.")
-        return
-    system.install_packages(package)
+    system.install_packages(packages)
 
-@genesis.command(hidden=True) # hidden=True keeps it out of the --help menu
-def monitor():
-    """Background monitor task for the systemd service."""
-    status.run_background_check()
+
+@genesis.command()
+@click.argument('packages', nargs=-1, required=True)
+def remove(packages):
+    """Finds and removes installed package(s)."""
+    system.remove_packages(packages)
+
+
+@genesis.command()
+def update():
+    """Performs a full system update (official repos + AUR)."""
+    system.update_system()
+
 
 @genesis.command()
 def self_update():
     """Checks for and applies updates to Genesis itself."""
-    console.print("🔎 Checking for updates to Genesis...")
     if self_update.check_for_updates():
         self_update.perform_update()
     else:
-        console.print("✅ Genesis is already up to date.")
+        print("✅ Genesis is already up to date.")
+
+
+@genesis.command()
+def status():
+    """Performs a comprehensive, AI-driven system health check."""
+    status.run_health_check()
+
+
+@genesis.command(hidden=True)
+def monitor():
+    """Background monitor task for the systemd service."""
+    status.run_background_check()
 
 
 if __name__ == '__main__':

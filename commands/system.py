@@ -287,7 +287,7 @@ _QUICK_LIMITS = [
 def _which(cmd: str) -> str | None:
     return shutil.which(cmd)
 
-def _run(cmd: List[str], check: bool = True, capture: bool = False, text: bool = True) -> subprocess.CompletedProcess:
+def _run(cmd: list[str], check: bool = True, capture: bool = False, text: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=check, capture_output=capture, text=text)
 
 def _systemctl_exists(unit: str) -> bool:

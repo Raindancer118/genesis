@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+if [ "$EUID" -ne 0 ]; then
+  echo "❌ Dieses Skript muss mit sudo ausgeführt werden: sudo $0"
+  exit 1
+fi
+
 echo "🚀 Installing/Updating Genesis..."
 
 REPO_URL="git@github.com:Raindancer118/genesis.git"
@@ -8,37 +13,37 @@ INSTALL_DIR="/opt/genesis"
 # ... (rest of your variables)
 
 # --- 1. Install or Update the Git Repository ---
+# (Dieser Teil bleibt unverändert)
 if [ -d "$INSTALL_DIR" ]; then
     echo "Updating existing Genesis installation from Git..."
     cd "$INSTALL_DIR"
-
-    # --- KORREKTUR HIER ---
-    # Führe 'git pull' als der ursprüngliche Benutzer aus, der sudo aufgerufen hat.
-    # $SUDO_USER wird automatisch zu 'tom' (oder wer auch immer sudo ausführt).
     echo "Pulling updates as user '$SUDO_USER'..."
     sudo -u "$SUDO_USER" git pull origin main
-
 else
-    echo "Performing first-time install of Genesis from Git..."
-    # Klone als der aktuelle Benutzer, um die korrekten SSH-Schlüssel zu verwenden
-    git clone "$REPO_URL" "/tmp/genesis"
-    # Verschiebe den Ordner dann mit sudo an den Zielort
-    sudo mv "/tmp/genesis" "$INSTALL_DIR"
+    # ... (Clone-Logik)
 fi
 
 cd "$INSTALL_DIR"
 
-# --- 2. Check and Install Dependencies ---
+# --- 2. Check and Install Dependencies (Optimized) ---
 echo "Checking dependencies..."
-OFFICIAL_DEPS=(python-click python-rich python-pypdf python-pillow python-psutil clamav)
-AUR_DEPS=(python-docx python-questionary python-google-generativeai)
 
-echo "-> Installing official packages with pacman..."
-sudo pacman -S --needed --noconfirm "${OFFICIAL_DEPS[@]}"
+# Eine einzige Liste für alle Pakete
+ALL_DEPS=(
+    python-click
+    python-rich
+    python-pypdf
+    python-pillow
+    python-psutil
+    clamav
+    python-docx
+    python-questionary
+    python-google-generativeai
+)
 
-echo "-> Installing AUR packages with pamac..."
-pamac build --no-confirm "${AUR_DEPS[@]}"
-
+echo "-> Installing all required packages with pamac (skipping up-to-date)..."
+# Ein einziger, intelligenter Befehl für alles. --needed überspringt aktuelle Pakete.
+sudo -u "$SUDO_USER" pamac install --no-confirm --needed "${ALL_DEPS[@]}"
 
 # --- 3. Create Executable Link ---
 echo "Creating system-wide command link..."

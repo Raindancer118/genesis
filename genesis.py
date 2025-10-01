@@ -99,9 +99,7 @@ def update():
 def self_update():
     """Checks for and applies updates to Genesis itself."""
     # KORRIGIERT
-    has_updates, stashed_changes = self_update_module.check_for_updates()
-    if has_updates:
-        self_update_module.perform_update(stashed_changes=stashed_changes)
+    self_update_module.run_self_update()
 
 
 @genesis.command()

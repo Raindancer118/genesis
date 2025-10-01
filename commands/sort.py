@@ -1,3 +1,4 @@
+# type: ignore
 """Interactive sorting workflow for Genesis."""
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from typing import Dict, Tuple
 
 from .storage import storage
 
+# --- Defensive TUI & Content Analysis Library Imports ---
 try:
     from rich.console import Console
     from rich.panel import Panel
@@ -30,43 +32,36 @@ except ImportError:  # pragma: no cover - optional dependency
     questionary = None  # type: ignore[assignment]
     Style = None  # type: ignore[assignment]
 
-try:
+try:  # Optional libraries for content analysis
     from PIL import Image
-except ImportError:  # pragma: no cover - optional dependency
+    import pypdf # noqa: F401
+    import docx # noqa: F401
+except ImportError:
     Image = None  # type: ignore[assignment]
 
-# ``pypdf`` and ``docx`` are currently unused in the heuristics but may be
-# leveraged in future enhancements. Import them defensively so users see a clear
-# error the moment we attempt to expand the analyser.
-try:  # pragma: no cover - optional dependency
-    import pypdf  # noqa: F401
-    import docx  # noqa: F401
-except ImportError:
-    pass
 
+# --- CONFIGURATION ---
 MEMORY_NAMESPACE = "sorter_memory"
 
+# Rules for files based on their extension
 FILE_MAPPINGS = {
-    ".jpg": "Images",
-    ".jpeg": "Images",
-    ".png": "Images",
-    ".gif": "Images",
-    ".bmp": "Images",
-    ".webp": "Images",
-    ".pdf": "Documents",
-    ".doc": "Documents",
-    ".docx": "Documents",
-    ".txt": "Documents",
-    ".md": "Documents",
-    ".ppt": "Presentations",
-    ".pptx": "Presentations",
-    ".csv": "Spreadsheets",
-    ".xls": "Spreadsheets",
-    ".xlsx": "Spreadsheets",
-    ".zip": "Archives",
-    ".rar": "Archives",
-    ".7z": "Archives",
-    ".tar": "Archives",
+    ".jpg": "Images", ".jpeg": "Images", ".png": "Images", ".gif": "Images",
+    ".bmp": "Images", ".webp": "Images", ".pdf": "Documents", ".doc": "Documents",
+    ".docx": "Documents", ".txt": "Documents", ".md": "Documents", ".ppt": "Presentations",
+    ".pptx": "Presentations", ".csv": "Spreadsheets", ".xls": "Spreadsheets",
+    ".xlsx": "Spreadsheets", ".zip": "Archives", ".rar": "Archives",
+    ".7z": "Archives", ".tar": "Archives",
+}
+
+# --- NEW: Rules for folders based on their name ---
+FOLDER_MAPPINGS = {
+    "Code": "Programming",
+    "Obsidian": "Notes",
+    "BlueJ": "Programming",
+    "Sicherungen": "Backups",
+    "AnalysisUndStochastik": "University",
+    "IT Orga Folien": "University",
+    "Fonts": "Assets/Fonts",
 }
 
 DEFAULT_CATEGORY = "Other"
@@ -74,27 +69,17 @@ DESTINATION_FOLDER = "Sorted_Output"
 
 
 def sort_directory(path: str) -> None:
-    """Sort the contents of *path* into categorised directories.
-
-    The workflow mirrors the reference script requested by the user: it renders
-    a three phase TUI, remembers decisions between runs, performs simple content
-    analysis and gently guides the user through outstanding classification
-    choices.
-    """
+    """Sort the contents of *path* into categorised directories."""
 
     directory = Path(path).expanduser().resolve()
 
-    if not directory.exists():
-        print(f"Path '{directory}' does not exist.")
-        return
-    if not directory.is_dir():
-        print(f"Path '{directory}' is not a directory.")
+    if not directory.exists() or not directory.is_dir():
+        print(f"ERROR: Path '{directory}' is not a valid directory.", file=sys.stderr)
         return
 
-    if _IMPORT_ERROR is not None or Console is None or Panel is None or Progress is None:
+    if _IMPORT_ERROR is not None or Console is None:
         print(
-            "ERROR: Optional dependencies for the interactive sorter are missing. "
-            "Install 'rich' and re-run the command.",
+            "ERROR: Optional dependency 'rich' is missing for the sorter TUI.",
             file=sys.stderr,
         )
         if _IMPORT_ERROR is not None:
@@ -105,22 +90,24 @@ def sort_directory(path: str) -> None:
     directory_key, memory_blob, directory_memory = _load_memory(directory)
     memory_changed = False
 
+    # --- PHASE 1: DISCOVERY ---
     console.print(Panel.fit("[bold cyan]🔎 Phase 1: Discovery[/bold cyan]", border_style="cyan"))
     with console.status("[bold green]Scanning for unsorted items..."):
         items_to_process = _discover_items(directory)
-        time.sleep(0.4)  # Provide a subtle pause for user feedback
+        time.sleep(0.4)
 
     if not items_to_process:
         console.print("✅ No new files or folders to sort. Exiting.")
         return
-
     console.print(f"Found {len(items_to_process)} items to sort.")
 
+    # --- PHASE 2: PREPARING DESTINATION ---
     console.print(Panel.fit("\n[bold cyan]🔎 Phase 2: Preparing Destination[/bold cyan]", border_style="cyan"))
     destination_root = directory / DESTINATION_FOLDER
     destination_root.mkdir(exist_ok=True)
-    console.print(f"Destination is [bold magenta]'%s'[/bold magenta]" % destination_root.name)
+    console.print(f"Destination is [bold magenta]'{destination_root.name}'[/bold magenta]")
 
+    # --- PHASE 3: SORTING ---
     console.print(Panel.fit("\n[bold cyan]🚀 Phase 3: Sorting[/bold cyan]", border_style="cyan"))
 
     progress = Progress(
@@ -188,106 +175,90 @@ def _decide_category(
 ) -> Tuple[str, bool]:
     rules_key = "folder_rules" if item.is_dir() else "file_rules"
     memory_bucket = memory.setdefault(rules_key, {})
-    lookup_key = (item.suffix.lower() or item.name.lower()) if rules_key == "file_rules" else item.name.lower()
+    # Use name for folders, suffix for files as the lookup key
+    lookup_key = item.name.lower() if item.is_dir() else (item.suffix.lower() or item.name.lower())
 
+    # 1. Check memory for a previously saved user choice
     if lookup_key in memory_bucket:
         return memory_bucket[lookup_key], False
 
-    category = FILE_MAPPINGS.get(item.suffix.lower()) if not item.is_dir() else None
+    # 2. Apply hardcoded rules (FOLDER_MAPPINGS for dirs, FILE_MAPPINGS for files)
+    category = None
+    if item.is_dir():
+        category = FOLDER_MAPPINGS.get(item.name)
+    else:
+        category = FILE_MAPPINGS.get(item.suffix.lower())
 
+    # 3. Use content analysis for suggestions (e.g., screenshots)
     if suggestion and suggestion != category:
         if interactive:
             pause_progress()
             try:
-                style = Style(
-                    [
-                        ("question", "bold yellow"),
-                        ("answer", "bold green"),
-                        ("pointer", "bold cyan"),
-                    ]
-                ) if Style is not None else None
-                use_suggestion = questionary.confirm(  # type: ignore[operator]
+                style = Style([("question", "bold yellow"), ("answer", "bold green")])
+                use_suggestion = questionary.confirm(
                     f"My analysis suggests '{item.name}' is a '{suggestion}'. Use this category?",
-                    default=True,
-                    style=style,
+                    default=True, style=style
                 ).ask()
-            except (KeyboardInterrupt, EOFError):
-                use_suggestion = False
-                console = Console() if Console is not None else None
-                if console:
-                    console.print("[bold red]Skipping decision.[/bold red]")
+                if use_suggestion:
+                    category = suggestion
+            except (KeyboardInterrupt, TypeError):
+                Console().print("[bold red]Skipping decision.[/bold red]")
             finally:
                 resume_progress()
-            if use_suggestion:
-                category = suggestion
-                memory_bucket[lookup_key] = category
-                return category, True
-        else:
+        else: # In non-interactive mode, trust the suggestion
             category = suggestion
 
+    # 4. If no category found yet, prompt the user
     if category is None:
-        category = _prompt_for_category(item, interactive)
+        if interactive:
+            pause_progress()
+            category = _prompt_for_category(item)
+            resume_progress()
+        else:
+            category = DEFAULT_CATEGORY
 
-    if category:
-        memory_bucket[lookup_key] = category
-    else:
-        category = DEFAULT_CATEGORY
-    return category, True
+    # 5. Save the final decision and return
+    final_category = category or DEFAULT_CATEGORY
+    memory_bucket[lookup_key] = final_category
+    return final_category, True
 
 
-def _prompt_for_category(item: Path, interactive: bool) -> str:
-    if not interactive:
-        return DEFAULT_CATEGORY
-
-    options = sorted({*FILE_MAPPINGS.values(), DEFAULT_CATEGORY})
+def _prompt_for_category(item: Path) -> str:
+    """Ask the user to choose a category for an item."""
     try:
-        style = Style(
-            [
-                ("question", "bold cyan"),
-                ("answer", "bold green"),
-                ("pointer", "bold magenta"),
-            ]
-        ) if Style is not None else None
-        choice = questionary.select(  # type: ignore[operator]
+        options = sorted({*FILE_MAPPINGS.values(), *FOLDER_MAPPINGS.values(), DEFAULT_CATEGORY})
+        style = Style([("question", "bold cyan"), ("answer", "bold green")])
+        choice = questionary.select(
             f"How should Genesis file '{item.name}'?",
-            choices=options + ["Create new category"],
-            style=style,
+            choices=options + ["Create new category"], style=style
         ).ask()
-    except (KeyboardInterrupt, EOFError):
+
+        if choice == "Create new category":
+            new_category = questionary.text("Enter a custom category name:", style=style).ask()
+            return (new_category or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
+        return choice or DEFAULT_CATEGORY
+    except (KeyboardInterrupt, TypeError):
         return DEFAULT_CATEGORY
-
-    if choice == "Create new category":
-        try:
-            new_category = questionary.text(  # type: ignore[operator]
-                "Enter a custom category name:",
-                style=style,
-            ).ask()
-        except (KeyboardInterrupt, EOFError):
-            return DEFAULT_CATEGORY
-        return (new_category or DEFAULT_CATEGORY).strip() or DEFAULT_CATEGORY
-
-    return choice or DEFAULT_CATEGORY
 
 
 def _suggest_category(item: Path) -> str | None:
-    if not item.is_file():
+    """Analyze file content to suggest a category."""
+    if not item.is_file() or Image is None:
         return None
 
-    if Image is not None and item.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+    if item.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
         try:
             with Image.open(item) as img:
                 width, height = img.size
-        except Exception:  # pragma: no cover - image inspection errors
-            return None
-        if width > 0 and height > 0:
-            aspect_ratio = width / height
-            if width > 1200 and abs(aspect_ratio - (16 / 9)) < 0.1:
+            if width > 1200 and abs(width / height - (16 / 9)) < 0.1:
                 return "Images/Screenshots"
-
+        except Exception:
+            return None
     return None
 
 
 def _resolve_collision(destination_dir: Path, filename: str) -> Path:
+    """Find a unique filename if the target path already exists."""
     destination = destination_dir / filename
     if not destination.exists():
         return destination
@@ -302,8 +273,8 @@ def _resolve_collision(destination_dir: Path, filename: str) -> Path:
         counter += 1
 
 
-def _load_memory(directory: Path) -> Tuple[str, Dict[str, Dict[str, Dict[str, str]]], Dict[str, Dict[str, str]]]:
-    blob: Dict[str, Dict[str, Dict[str, str]]] = storage.get(MEMORY_NAMESPACE, {})
+def _load_memory(directory: Path) -> Tuple[str, Dict, Dict]:
+    blob = storage.get(MEMORY_NAMESPACE, {})
     directory_key = str(directory)
     raw = blob.get(directory_key, {}) or {}
     directory_memory = {
@@ -313,11 +284,7 @@ def _load_memory(directory: Path) -> Tuple[str, Dict[str, Dict[str, Dict[str, st
     return directory_key, blob, directory_memory
 
 
-def _save_memory(
-    directory_key: str,
-    blob: Dict[str, Dict[str, Dict[str, str]]],
-    directory_memory: Dict[str, Dict[str, str]],
-) -> None:
+def _save_memory(directory_key: str, blob: Dict, directory_memory: Dict) -> None:
     blob[directory_key] = directory_memory
     storage.set(MEMORY_NAMESPACE, blob)
 

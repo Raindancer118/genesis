@@ -23,12 +23,9 @@ def greet():
 
 
 @genesis.command()
-@click.argument('project_type')
-@click.argument('name')
 def new(project_type, name):
-    """Initializes a new project from a predefined template."""
-    project.create_project(project_type, name)
-
+    """Initializes a new project using an interactive wizard."""
+    project.run_project_wizard()
 
 @genesis.command()
 @click.argument('name')

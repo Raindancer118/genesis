@@ -1,7 +1,12 @@
-#!/usr/bin/env python3
+#!/usr/-bin/env python3
 import click
-# --- CHANGE 1: Rename the imported 'greet' module ---
-from commands import greet as greet_module, project, sort, system, self_update, status
+# --- KORRIGIERT: Allen potenziellen Konflikten einen Alias geben ---
+from commands import greet as greet_module
+from commands import project
+from commands import sort as sort_module
+from commands import system
+from commands import self_update as self_update_module
+from commands import status as status_module
 
 
 @click.group()
@@ -13,11 +18,10 @@ def genesis():
 @genesis.command()
 def greet():
     """Displays a custom morning greeting."""
-    # --- CHANGE 2: Call the function on the renamed module ---
+    # KORRIGIERT
     greet_module.say_good_morning()
 
 
-# (The rest of your commands remain exactly the same)
 @genesis.command()
 @click.argument('project_type')
 @click.argument('name')
@@ -43,7 +47,8 @@ def build(name):
 @click.option('--path', default='.', help='The directory to sort. Defaults to the current directory.')
 def sort(path):
     """Sorts files in a directory using an intelligent, interactive engine."""
-    sort.sort_directory(path)
+    # KORRIGIERT
+    sort_module.sort_directory(path)
 
 
 @genesis.command()
@@ -76,22 +81,26 @@ def update():
 @genesis.command()
 def self_update():
     """Checks for and applies updates to Genesis itself."""
-    if self_update.check_for_updates():
-        self_update.perform_update()
+    # KORRIGIERT
+    if self_update_module.check_for_updates():
+        self_update_module.perform_update()
     else:
+        # You need a console object here or just use print
         print("✅ Genesis is already up to date.")
 
 
 @genesis.command()
 def status():
     """Performs a comprehensive, AI-driven system health check."""
-    status.run_health_check()
+    # KORRIGIERT
+    status_module.run_health_check()
 
 
 @genesis.command(hidden=True)
 def monitor():
     """Background monitor task for the systemd service."""
-    status.run_background_check()
+    # KORRIGIERT
+    status_module.run_background_check()
 
 
 if __name__ == '__main__':

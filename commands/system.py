@@ -1,6 +1,121 @@
 import subprocess
 import os
+from . import self_update
 from rich.progress import Progress  # Assuming python-rich is installed
+from rich.console import Console
+import questionary
+
+console = Console()
+
+
+def _run_command(command, stream_output=True):
+    """Helper to run a command and handle errors."""
+    try:
+        if stream_output:
+            # For commands that need user interaction or show progress
+            return subprocess.run(command, check=True)
+        else:
+            # For commands where we just need the result
+            return subprocess.run(command, check=True, capture_output=True, text=True)
+    except FileNotFoundError:
+        console.print(
+            f"[bold red]Error: Command '{command[0]}' not found. Is it installed and in your PATH?[/bold red]")
+        return None
+    except subprocess.CalledProcessError as e:
+        console.print(f"[bold red]An error occurred while running '{' '.join(command)}'.[/bold red]")
+        if not stream_output:
+            console.print(f"[red]Stderr: {e.stderr}[/red]")
+        return None
+
+
+def install_packages(packages):
+    """Intelligently finds and installs a list of packages."""
+    to_install_pacman = []
+    to_install_pamac = []
+    not_found = []
+
+    for package in packages:
+        console.print(f"🔎 Searching for [bold magenta]'{package}'[/bold magenta]...")
+        # Check official repos with pacman
+        if subprocess.run(['pacman', '-Si', package], capture_output=True).returncode == 0:
+            console.print("  -> Found in official repositories.")
+            to_install_pacman.append(package)
+        # Check AUR with pamac
+        elif subprocess.run(['pamac', 'info', package], capture_output=True).returncode == 0:
+            console.print("  -> Found in the AUR.")
+            to_install_pamac.append(package)
+        else:
+            not_found.append(package)
+
+    if not_found:
+        console.print(f"[bold yellow]Warning: Could not find package(s): {', '.join(not_found)}[/bold yellow]")
+
+    if not to_install_pacman and not to_install_pamac:
+        console.print("No packages to install.")
+        return
+
+    # Confirmation
+    console.print("\n--- [bold]Installation Plan[/bold] ---")
+    if to_install_pacman:
+        console.print(f"Official (pacman): [green]{', '.join(to_install_pacman)}[/green]")
+    if to_install_pamac:
+        console.print(f"AUR (pamac): [cyan]{', '.join(to_install_pamac)}[/cyan]")
+
+    if questionary.confirm("Proceed with installation?").ask():
+        if to_install_pacman:
+            _run_command(['sudo', 'pacman', '-S', '--needed', *to_install_pacman])
+        if to_install_pamac:
+            _run_command(['pamac', 'build', *to_install_pamac])
+        console.print("\n✅ Installation complete.")
+    else:
+        console.print("Installation cancelled.")
+
+
+def remove_packages(packages):
+    """Finds and removes a list of installed packages."""
+    to_remove = []
+    not_found = []
+
+    for package in packages:
+        # AUR packages are managed by pacman after installation
+        if subprocess.run(['pacman', '-Qi', package], capture_output=True).returncode == 0:
+            to_remove.append(package)
+        else:
+            not_found.append(package)
+
+    if not_found:
+        console.print(f"[bold yellow]Warning: Package(s) not installed: {', '.join(not_found)}[/bold yellow]")
+
+    if not to_remove:
+        console.print("No packages to remove.")
+        return
+
+    console.print(f"\nPackages to be removed: [red]{', '.join(to_remove)}[/red]")
+    if questionary.confirm("Proceed with removal? This will also remove dependencies.").ask():
+        # -Rns removes the package, its dependencies not required by other packages, and config files
+        _run_command(['sudo', 'pacman', '-Rns', *to_remove])
+        console.print("\n✅ Removal complete.")
+    else:
+        console.print("Removal cancelled.")
+
+
+def update_system():
+    """Performs a full system update using pamac."""
+    """Performs a full system update and checks for Genesis updates."""
+    # --- NEW: Check for self-update first ---
+    if self_update.check_for_updates():
+        self_update.perform_update()
+        console.print("---")  # Separator
+
+    console.print("🚀 Starting full system update (Official Repos + AUR)...")
+    console.print("Pamac will handle the process. You may be prompted for your password.")
+
+    if questionary.confirm("Proceed with system update?").ask():
+        # pamac upgrade handles everything
+        _run_command(['pamac', 'upgrade'])
+        console.print("\n✅ System update process complete.")
+    else:
+        console.print("Update cancelled.")
 
 
 def scan_directory(path):

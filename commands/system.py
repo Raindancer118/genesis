@@ -7,6 +7,7 @@ import shutil
 import questionary
 from typing import List, Tuple
 from pathlib import Path
+import shlex
 
 
 PACMAN_AVAILABLE = shutil.which("pacman") is not None

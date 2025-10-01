@@ -302,9 +302,9 @@ def _is_root() -> bool:
     except AttributeError:
         return False
 
-def _read_xdg_dirs() -> Dict[str, Path]:
+def _read_xdg_dirs() -> dict[str, Path]:
     """Parst ~/.config/user-dirs.dirs und liefert Mappings (Desktop,Documents,Downloads,Music,Pictures,Videos)."""
-    result: Dict[str, Path] = {}
+    result: dict[str, Path] = {}
     cfg = Path.home() / ".config" / "user-dirs.dirs"
     if cfg.exists():
         for line in cfg.read_text(encoding="utf-8", errors="ignore").splitlines():

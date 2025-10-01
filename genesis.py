@@ -101,9 +101,6 @@ def self_update():
     # KORRIGIERT
     if self_update_module.check_for_updates():
         self_update_module.perform_update()
-    else:
-        # You need a console object here or just use print
-        print("✅ Genesis is already up to date.")
 
 
 @genesis.command()

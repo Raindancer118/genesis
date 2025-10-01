@@ -134,29 +134,44 @@ def check_for_updates(*, interactive: bool = True) -> Tuple[bool, Dict[str, Any]
         console.print(
             f"⬇️  Updates available: {status.behind_commits} new commit(s) ready to apply."
         )
-    except subprocess.CalledProcessError as exc:
-        error_message = exc.stderr or exc.stdout or str(exc)
-        console.print(
-            "[bold red]Failed to stash local changes automatically.[/bold red]"
-        )
-        console.print(error_message)
-
-    return None
+    return True, {"status": status}
 
 
 def restore_stash(stash_ref: Optional[str]):
     """Attempts to restore the provided stash entry, if any."""
 
-    return True, {"status": status}
+    if not stash_ref:
+        return
 
     try:
         _run_git_command(["stash", "pop", stash_ref])
         console.print("♻️  Restored stashed changes.")
-        return
     except subprocess.CalledProcessError:
         console.print(
             "[yellow]Automatic stash pop failed. Attempting safe apply…[/yellow]"
         )
+        try:
+            _run_git_command(["stash", "apply", stash_ref])
+            console.print("♻️  Applied stashed changes.")
+        except subprocess.CalledProcessError as exc:
+            error_message = exc.stderr or exc.stdout or str(exc)
+            console.print("[bold red]Automatic restoration of stashed changes failed.[/bold red]")
+            console.print(error_message)
+            console.print(
+                f"[yellow]Stash entry preserved as {stash_ref} for manual recovery if needed.[/yellow]"
+            )
+            return
+
+    try:
+        _run_git_command(["stash", "drop", stash_ref])
+        console.print("🧹  Cleaned up temporary stash entry.")
+    except subprocess.CalledProcessError as exc:
+        error_message = exc.stderr or exc.stdout or str(exc)
+        console.print(
+            "[yellow]Applied changes but could not drop the temporary stash entry automatically.[/yellow]"
+        )
+        console.print(error_message)
+
 
 def stash_local_changes():
     """Stashes local changes so the updater can run on a clean tree."""
@@ -189,42 +204,6 @@ def stash_local_changes():
         console.print(error_message)
 
     return None
-
-
-    """Attempts to restore the provided stash entry, if any."""
-
-    if not stash_ref:
-        return
-
-    try:
-        _run_git_command(["stash", "pop", stash_ref])
-        console.print("♻️  Restored stashed changes.")
-        return
-    except subprocess.CalledProcessError:
-        console.print(
-            "[yellow]Automatic stash pop failed. Attempting safe apply…[/yellow]"
-        )
-    try:
-        _run_git_command(["stash", "apply", stash_ref])
-        console.print("♻️  Applied stashed changes.")
-    except subprocess.CalledProcessError as exc:
-        error_message = exc.stderr or exc.stdout or str(exc)
-        console.print("[bold red]Automatic restoration of stashed changes failed.[/bold red]")
-        console.print(error_message)
-        console.print(
-            f"[yellow]Stash entry preserved as {stash_ref} for manual recovery if needed.[/yellow]"
-        )
-        return
-
-    try:
-        _run_git_command(["stash", "drop", stash_ref])
-        console.print("🧹  Cleaned up temporary stash entry.")
-    except subprocess.CalledProcessError as exc:
-        error_message = exc.stderr or exc.stdout or str(exc)
-        console.print(
-            "[yellow]Applied changes but could not drop the temporary stash entry automatically.[/yellow]"
-        )
-        console.print(error_message)
 
 
 def run_self_update():

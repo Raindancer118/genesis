@@ -30,8 +30,8 @@ cd "$INSTALL_DIR"
 
 # --- 2. Check and Install Dependencies ---
 echo "Checking dependencies..."
-OFFICIAL_DEPS=(python-click python-rich python-pypdf python-pillow python-psutil python-google-generativeai clamav)
-AUR_DEPS=(python-docx python-questionary)
+OFFICIAL_DEPS=(python-click python-rich python-pypdf python-pillow python-psutil clamav)
+AUR_DEPS=(python-docx python-questionary python-google-generativeai)
 
 echo "-> Installing official packages with pacman..."
 sudo pacman -S --needed --noconfirm "${OFFICIAL_DEPS[@]}"

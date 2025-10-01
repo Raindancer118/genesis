@@ -1,4 +1,38 @@
 #!/usr/bin/env python3
+"""Genesis CLI entry point."""
+
+from __future__ import annotations
+
+import site
+import sys
+from pathlib import Path
+
+def _bootstrap_local_venv() -> None:
+    """Ensure the bundled virtualenv is importable without activation."""
+
+    install_dir = Path(__file__).resolve().parent
+    venv_dir = install_dir / ".venv"
+    if not venv_dir.exists():
+        return
+
+    if sys.platform == "win32":  # pragma: no cover - Windows is not primary target
+        site_packages = venv_dir / "Lib" / "site-packages"
+        if site_packages.exists():
+            site.addsitedir(str(site_packages))
+        return
+
+    lib_dir = venv_dir / "lib"
+    if not lib_dir.exists():
+        return
+
+    for path in lib_dir.iterdir():
+        candidate = path / "site-packages"
+        if candidate.exists():
+            site.addsitedir(str(candidate))
+
+
+_bootstrap_local_venv()
+
 import click
 # --- KORRIGIERT: Allen potenziellen Konflikten einen Alias geben ---
 from commands import greet as greet_module

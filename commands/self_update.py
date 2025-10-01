@@ -1,39 +1,21 @@
+"""Self-update helpers for the Genesis CLI."""
+
+from __future__ import annotations
+
+import os
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from rich.console import Console
 
 console = Console()
-GENESIS_DIR = "/opt/genesis"
+_DEFAULT_INSTALL_DIR = Path(__file__).resolve().parent.parent
+GENESIS_DIR = Path(os.environ.get("GENESIS_DIR", "/opt/genesis"))
+if not GENESIS_DIR.exists():
+    GENESIS_DIR = _DEFAULT_INSTALL_DIR
 
-def stash_local_changes():
-    """Stashes local changes so the updater can run on a clean tree."""
-    label = f"genesis-self-update-{int(time.time())}"
-    try:
-        subprocess.run(
-            [
-                "git",
-                "stash",
-                "push",
-                "--include-untracked",
-                "--message",
-                label,
-            ],
-            cwd=GENESIS_DIR,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        console.print("🧺 Local changes stashed temporarily for the update.")
-        return True
-    except subprocess.CalledProcessError as exc:
-        error_message = exc.stderr or exc.stdout or str(exc)
-        console.print(
-            "[bold red]Failed to stash local changes automatically.[/bold red]"
-        )
-        console.print(error_message)
-        return False
 
 @dataclass
 class RepoStatus:
@@ -49,7 +31,7 @@ class RepoStatus:
 class GitCommandError(RuntimeError):
     """Raised when a git command fails while checking for updates."""
 
-
+    
 def _run_git_command(args, *, check=True):
     """Runs a git command inside the Genesis directory."""
     return subprocess.run(
@@ -68,22 +50,57 @@ def _parse_int(value: str) -> int:
         raise GitCommandError(str(exc)) from exc
 
 
+def _resolve_tracking_branch() -> Optional[str]:
+    """Return the upstream tracking ref for the current branch if set."""
+
+    try:
+        result = _run_git_command(
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        )
+    except subprocess.CalledProcessError:
+        return None
+
+    ref = result.stdout.strip()
+    return ref or None
+
+
+def _count_commits(range_expr: str) -> int:
+    """Return the number of commits in the provided revision range."""
+
+    try:
+        result = _run_git_command(["rev-list", "--count", range_expr])
+    except subprocess.CalledProcessError as exc:
+        message = exc.stderr or exc.stdout or str(exc)
+        if "unknown revision" in message.lower():
+            return 0
+        raise GitCommandError(message) from exc
+
+    return _parse_int(result.stdout)
+
+
 def _collect_repo_status(*, fetch_remote: bool = True) -> RepoStatus:
     try:
+        tracking_branch = _resolve_tracking_branch()
+
         if fetch_remote:
-            _run_git_command(["fetch", "--prune"])
+            if tracking_branch and "/" in tracking_branch:
+                remote = tracking_branch.split("/", 1)[0]
+                _run_git_command(["fetch", "--prune", remote])
+            else:
+                _run_git_command(["fetch", "--prune"])
 
         porcelain_result = _run_git_command(["status", "--porcelain"])
-        behind_result = _run_git_command(["rev-list", "--count", "HEAD..origin/main"])
-        ahead_result = _run_git_command(["rev-list", "--count", "origin/main..HEAD"])
+        behind_target = tracking_branch or "origin/main"
+        behind_commits = _count_commits(f"HEAD..{behind_target}")
+        ahead_commits = _count_commits(f"{behind_target}..HEAD")
     except subprocess.CalledProcessError as exc:  # pragma: no cover - passes through
         error_message = exc.stderr or exc.stdout or str(exc)
         raise GitCommandError(error_message) from exc
 
     return RepoStatus(
         is_dirty=porcelain_result.stdout.strip() != "",
-        behind_commits=_parse_int(behind_result.stdout),
-        ahead_commits=_parse_int(ahead_result.stdout),
+        behind_commits=behind_commits,
+        ahead_commits=ahead_commits,
     )
 
 
@@ -116,17 +133,15 @@ def check_for_updates(*, interactive: bool = True) -> Tuple[bool, Dict[str, Any]
         console.print(
             f"⬇️  Updates available: {status.behind_commits} new commit(s) ready to apply."
         )
-        console.print(
-            "Run `git stash pop` manually to recover them if needed."
-        )
-        console.print(error_message)
+
     return True, {"status": status}
+
 
 def stash_local_changes():
     """Stashes local changes so the updater can run on a clean tree."""
     label = f"genesis-self-update-{int(time.time())}"
     try:
-      _run_git_command(
+        _run_git_command(
             [
                 "stash",
                 "push",
@@ -135,19 +150,6 @@ def stash_local_changes():
                 label,
             ]
         )
-        console.print(error_message)
-        return False
-
-def _run_git_command(args, *, check=True):
-    """Runs a git command inside the Genesis directory."""
-    return subprocess.run(
-        ["git", *args],
-        cwd=GENESIS_DIR,
-        check=check,
-        capture_output=True,
-        text=True,
-    )
-
 
         stash_list = _run_git_command(["stash", "list"])
         for line in stash_list.stdout.splitlines():
@@ -236,12 +238,13 @@ def run_self_update():
             return
 
     console.print("🚀 Applying update via installer script…")
+    installer_path = GENESIS_DIR / "install.sh"
     try:
-        subprocess.run(["sudo", f"{GENESIS_DIR}/install.sh"], check=True)
+        subprocess.run(["sudo", str(installer_path)], check=True)
         console.print("✅ Update completed successfully.")
     except FileNotFoundError:
         console.print(
-            f"[bold red]Installer not found at {GENESIS_DIR}/install.sh."
+            f"[bold red]Installer not found at {installer_path}."
             " Please verify your installation.[/bold red]"
         )
     except subprocess.CalledProcessError as exc:

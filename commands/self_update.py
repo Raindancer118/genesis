@@ -335,6 +335,7 @@ def run_self_update():
         restore_stash(stash_ref)
         return
     
+    update_succeeded = False
     try:
         # Check if installer is executable
         if not os.access(installer_path, os.X_OK):
@@ -350,6 +351,7 @@ def run_self_update():
         )
         
         if result.returncode == 0:
+            update_succeeded = True
             console.print("✅ Update completed successfully.")
             # If we had stashed changes, inform user about manual restoration
             if stash_ref:
@@ -359,24 +361,22 @@ def run_self_update():
                 console.print(
                     "[yellow]After reviewing the update, you can restore them with:[/yellow]"
                 )
-                console.print(f"[yellow]  git -C {GENESIS_DIR} stash pop {stash_ref}[/yellow]")
+                console.print(f"[yellow]  git -C {GENESIS_DIR} stash apply {stash_ref}[/yellow]")
         else:
             console.print(
                 f"[bold red]Update failed with exit code {result.returncode}."
                 " Review the installer output above for details.[/bold red]"
             )
-            # Only restore stash if update failed, since files weren't changed
-            restore_stash(stash_ref)
     except FileNotFoundError:
         console.print(
             "[bold red]sudo command not found. Please run the installer manually:[/bold red]"
         )
         console.print(f"  sudo {installer_path}")
-        # Restore stash since update didn't happen
-        restore_stash(stash_ref)
     except Exception as exc:
         console.print(
             f"[bold red]Unexpected error during update: {exc}[/bold red]"
         )
-        # Restore stash since update didn't happen
-        restore_stash(stash_ref)
+    finally:
+        # Only restore stash if update failed (files weren't changed)
+        if not update_succeeded:
+            restore_stash(stash_ref)

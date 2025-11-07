@@ -2,7 +2,7 @@ import subprocess
 import os
 import json
 from . import self_update
-from rich.progress import Progress  # Assuming python-rich is installed
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.console import Console
 import shutil
 import questionary
@@ -305,6 +305,27 @@ def _is_root() -> bool:
         return os.geteuid() == 0
     except AttributeError:
         return False
+
+def _should_count_as_scanned_file(line: str) -> bool:
+    """
+    Determines if a ClamAV output line represents a scanned file.
+    Returns True if the line is a file path (contains ':' and is not a header line).
+    """
+    return bool(line and not line.startswith("---") and ":" in line)
+
+def _create_scan_progress() -> Progress:
+    """
+    Creates a configured Progress object for virus scanning.
+    Returns a Progress instance with spinner, text, bar, and task progress columns.
+    """
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+        transient=False,
+    )
 
 def _read_xdg_dirs() -> dict[str, Path]:
     """Parst ~/.config/user-dirs.dirs und liefert Mappings (Desktop,Documents,Downloads,Music,Pictures,Videos)."""
@@ -615,20 +636,11 @@ def smart_scan(profile: str | None = None) -> None:
     console.print(f"[dim]{shlex.join(args)}[/dim]")
 
     # Streaming-Ausgabe mit Progress-Tracking
-    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
-    
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     found_counter = 0
     scanned_counter = 0
     
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        console=console,
-        transient=False,
-    ) as progress:
+    with _create_scan_progress() as progress:
         task = progress.add_task("[cyan]Scanning files...", total=None)
         
         try:
@@ -637,7 +649,7 @@ def smart_scan(profile: str | None = None) -> None:
                 line = line.rstrip("\n")
                 
                 # Count scanned files (ClamAV outputs file paths)
-                if line and not line.startswith("---") and ":" in line:
+                if _should_count_as_scanned_file(line):
                     scanned_counter += 1
                     progress.update(task, advance=1, description=f"[cyan]Scanned {scanned_counter} files...")
                 
@@ -699,20 +711,11 @@ def scan_usb_drives() -> None:
     console.print(f"[dim]{shlex.join(args)}[/dim]")
     
     # Streaming-Ausgabe mit Progress-Tracking
-    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
-    
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     found_counter = 0
     scanned_counter = 0
     
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        console=console,
-        transient=False,
-    ) as progress:
+    with _create_scan_progress() as progress:
         task = progress.add_task("[cyan]Scanning files...", total=None)
         
         try:
@@ -721,7 +724,7 @@ def scan_usb_drives() -> None:
                 line = line.rstrip("\n")
                 
                 # Count scanned files (ClamAV outputs file paths)
-                if line and not line.startswith("---") and ":" in line:
+                if _should_count_as_scanned_file(line):
                     scanned_counter += 1
                     progress.update(task, advance=1, description=f"[cyan]Scanned {scanned_counter} files...")
                 
@@ -777,20 +780,11 @@ def scan_directory(path: str) -> None:
     console.print(f"[dim]{shlex.join(args)}[/dim]")
     
     # Streaming output with progress tracking
-    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
-    
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     found_counter = 0
     scanned_counter = 0
     
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        console=console,
-        transient=False,
-    ) as progress:
+    with _create_scan_progress() as progress:
         task = progress.add_task("[cyan]Scanning files...", total=None)
         
         stdout_lines = []
@@ -801,7 +795,7 @@ def scan_directory(path: str) -> None:
                 stdout_lines.append(line)
                 
                 # Count scanned files (ClamAV outputs file paths)
-                if line and not line.startswith("---") and ":" in line:
+                if _should_count_as_scanned_file(line):
                     scanned_counter += 1
                     progress.update(task, advance=1, description=f"[cyan]Scanned {scanned_counter} files...")
                 

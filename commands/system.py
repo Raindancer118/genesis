@@ -568,10 +568,10 @@ def smart_scan(profile: str | None = None) -> None:
             choice = questionary.select(
                 "Choose a scan profile:",
                 choices=[
-                    ("System Core (fast, essential areas)", "core"),
-                    ("Daily Use (fast, your common dirs)", "daily"),
-                    ("Home: Rest (fast, remaining top-level in $HOME)", "rest"),
-                    ("Full System (slow, widest coverage)", "full"),
+                    questionary.Choice("System Core (fast, essential areas)", "core"),
+                    questionary.Choice("Daily Use (fast, your common dirs)", "daily"),
+                    questionary.Choice("Home: Rest (fast, remaining top-level in $HOME)", "rest"),
+                    questionary.Choice("Full System (slow, widest coverage)", "full"),
                 ],
             ).ask()
             profile = choice or "core"
@@ -614,21 +614,42 @@ def smart_scan(profile: str | None = None) -> None:
     console.print("\n[bold cyan]🚀 Scanning…[/bold cyan]")
     console.print(f"[dim]{shlex.join(args)}[/dim]")
 
-    # Streaming-Ausgabe (nicht vorher Dateien zählen → schnell starten!)
+    # Streaming-Ausgabe mit Progress-Tracking
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+    
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     found_counter = 0
-    try:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            # Nur Funde oder Warnungen hervorheben
-            if line.endswith("FOUND"):
-                found_counter += 1
-                console.print(f"[bold red]{line}[/bold red]")
-            elif "WARNING:" in line:
-                console.print(f"[yellow]{line}[/yellow]")
-    finally:
-        stdout, stderr = proc.communicate()
+    scanned_counter = 0
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        task = progress.add_task("[cyan]Scanning files...", total=None)
+        
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                
+                # Count scanned files (ClamAV outputs file paths)
+                if line and not line.startswith("---") and ":" in line:
+                    scanned_counter += 1
+                    progress.update(task, advance=1, description=f"[cyan]Scanned {scanned_counter} files...")
+                
+                # Nur Funde oder Warnungen hervorheben
+                if line.endswith("FOUND"):
+                    found_counter += 1
+                    console.print(f"[bold red]{line}[/bold red]")
+                elif "WARNING:" in line:
+                    console.print(f"[yellow]{line}[/yellow]")
+        finally:
+            progress.update(task, description=f"[green]Completed scanning {scanned_counter} files")
+            stdout, stderr = proc.communicate()
 
     if proc.returncode not in (0, 1):  # 0=clean, 1=found infected
         console.print(f"[bold red]Scanner error (exit {proc.returncode}).[/bold red]")
@@ -677,20 +698,41 @@ def scan_usb_drives() -> None:
     console.print("\n[bold cyan]🚀 Scanning USB drives…[/bold cyan]")
     console.print(f"[dim]{shlex.join(args)}[/dim]")
     
-    # Streaming-Ausgabe
+    # Streaming-Ausgabe mit Progress-Tracking
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+    
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     found_counter = 0
-    try:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            if line.endswith("FOUND"):
-                found_counter += 1
-                console.print(f"[bold red]{line}[/bold red]")
-            elif "WARNING:" in line:
-                console.print(f"[yellow]{line}[/yellow]")
-    finally:
-        stdout, stderr = proc.communicate()
+    scanned_counter = 0
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        task = progress.add_task("[cyan]Scanning files...", total=None)
+        
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                
+                # Count scanned files (ClamAV outputs file paths)
+                if line and not line.startswith("---") and ":" in line:
+                    scanned_counter += 1
+                    progress.update(task, advance=1, description=f"[cyan]Scanned {scanned_counter} files...")
+                
+                if line.endswith("FOUND"):
+                    found_counter += 1
+                    console.print(f"[bold red]{line}[/bold red]")
+                elif "WARNING:" in line:
+                    console.print(f"[yellow]{line}[/yellow]")
+        finally:
+            progress.update(task, description=f"[green]Completed scanning {scanned_counter} files")
+            stdout, stderr = proc.communicate()
     
     if proc.returncode not in (0, 1):
         console.print(f"[bold red]Scanner error (exit {proc.returncode}).[/bold red]")
@@ -732,10 +774,48 @@ def scan_directory(path: str) -> None:
     args += list(_QUICK_LIMITS)
     args.append(str(target))
 
-    print(" ".join(shlex.quote(a) for a in args))
-    proc = subprocess.run(args, capture_output=True, text=True)
-    print("\n--- Scan Summary ---")
-    print(_summarize_scan(proc.stdout))
+    console.print(f"[dim]{shlex.join(args)}[/dim]")
+    
+    # Streaming output with progress tracking
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+    
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    found_counter = 0
+    scanned_counter = 0
+    
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        task = progress.add_task("[cyan]Scanning files...", total=None)
+        
+        stdout_lines = []
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                stdout_lines.append(line)
+                
+                # Count scanned files (ClamAV outputs file paths)
+                if line and not line.startswith("---") and ":" in line:
+                    scanned_counter += 1
+                    progress.update(task, advance=1, description=f"[cyan]Scanned {scanned_counter} files...")
+                
+                if line.endswith("FOUND"):
+                    found_counter += 1
+                    console.print(f"[bold red]{line}[/bold red]")
+                elif "WARNING:" in line:
+                    console.print(f"[yellow]{line}[/yellow]")
+        finally:
+            progress.update(task, description=f"[green]Completed scanning {scanned_counter} files")
+            _, stderr = proc.communicate()
+    
+    console.print("\n[bold green]— Scan Summary —[/bold green]")
+    console.print(_summarize_scan("\n".join(stdout_lines)))
 
 
 def interactive_scan_menu() -> None:
@@ -748,13 +828,13 @@ def interactive_scan_menu() -> None:
         choice = questionary.select(
             "Choose a scan option:",
             choices=[
-                ("Scan USB drives (connected USB devices)", "usb"),
-                ("Scan daily use areas (Downloads, Documents, Desktop, etc.)", "daily"),
-                ("Scan system core (fast, essential system areas)", "core"),
-                ("Scan home directory (remaining areas in your home)", "rest"),
-                ("Scan root directory (detailed scan of /)", "root"),
-                ("Full system scan (slow, comprehensive scan)", "full"),
-                ("Cancel", "cancel"),
+                questionary.Choice("Scan USB drives (connected USB devices)", "usb"),
+                questionary.Choice("Scan daily use areas (Downloads, Documents, Desktop, etc.)", "daily"),
+                questionary.Choice("Scan system core (fast, essential system areas)", "core"),
+                questionary.Choice("Scan home directory (remaining areas in your home)", "rest"),
+                questionary.Choice("Scan root directory (detailed scan of /)", "root"),
+                questionary.Choice("Full system scan (slow, comprehensive scan)", "full"),
+                questionary.Choice("Cancel", "cancel"),
             ],
         ).ask()
         

@@ -20,6 +20,22 @@ if not GENESIS_DIR.exists():
 # Repository configuration
 REPO_HTTPS_URL = "https://github.com/Raindancer118/genesis.git"
 
+# Derive SSH URL patterns from HTTPS URL
+def _get_ssh_url_from_https(https_url: str) -> list[str]:
+    """Convert HTTPS URL to possible SSH URL patterns."""
+    # Extract the path from HTTPS URL (e.g., "Raindancer118/genesis.git")
+    if https_url.startswith("https://github.com/"):
+        path = https_url[len("https://github.com/"):]
+        ssh_base = f"git@github.com:{path}"
+        # Return both with and without .git extension
+        if path.endswith(".git"):
+            return [ssh_base, ssh_base[:-4]]
+        else:
+            return [ssh_base, f"{ssh_base}.git"]
+    return []
+
+_REPO_SSH_PATTERNS = _get_ssh_url_from_https(REPO_HTTPS_URL)
+
 
 @dataclass
 class RepoStatus:
@@ -109,13 +125,7 @@ def _ensure_https_remote() -> bool:
             return True
         
         # If SSH URL for the same repo, try to convert to HTTPS
-        # Match git@github.com:Raindancer118/genesis.git or git@github.com:Raindancer118/genesis
-        ssh_patterns = [
-            "git@github.com:Raindancer118/genesis.git",
-            "git@github.com:Raindancer118/genesis"
-        ]
-        
-        if current_url in ssh_patterns:
+        if current_url in _REPO_SSH_PATTERNS:
             try:
                 _run_git_command(["remote", "set-url", "origin", REPO_HTTPS_URL])
                 console.print("[yellow]Converted remote URL from SSH to HTTPS for better compatibility.[/yellow]")

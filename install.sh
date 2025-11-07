@@ -56,7 +56,7 @@ fi
 
 TRACKING_BRANCH="$(sudo -u "${SUDO_USER_REAL}" git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "origin/${CURRENT_BRANCH}")"
 
-echo "🔄 Pulling updates als '${SUDO_USER_REAL}' (branch: ${CURRENT_BRANCH})…"
+echo "🔄 Pulling updates as '${SUDO_USER_REAL}' (branch: ${CURRENT_BRANCH})…"
 if sudo -u "${SUDO_USER_REAL}" git pull --ff-only "${TRACKING_BRANCH%%/*}" "${CURRENT_BRANCH}" 2>/dev/null; then
   echo "✅ Git pull successful."
 else

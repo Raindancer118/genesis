@@ -36,3 +36,16 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Genesis storage (should never be in repo)
+state.json
+*.log
+*.cache
+*.db
+*.sqlite
+*.sqlite3
+config/
+storage/
+logs/
+cache/
+data/

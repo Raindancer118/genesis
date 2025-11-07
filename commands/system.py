@@ -309,7 +309,20 @@ def _is_root() -> bool:
 def _should_count_as_scanned_file(line: str) -> bool:
     """
     Determines if a ClamAV output line represents a scanned file.
-    Returns True if the line is a file path (contains ':' and is not a header line).
+    
+    ClamAV outputs file paths in the format: "/path/to/file: status"
+    where status is typically "OK", "FOUND", "ERROR", etc.
+    
+    This function filters out:
+    - Empty lines
+    - Header/separator lines (starting with "---")
+    - Summary lines without paths (though they may also contain ':')
+    
+    Note: This is a heuristic that works for typical ClamAV output but may
+    occasionally count summary lines. The actual file count is provided by
+    ClamAV's summary at the end of the scan.
+    
+    Returns True if the line appears to be a file scan result.
     """
     return bool(line and not line.startswith("---") and ":" in line)
 
@@ -651,7 +664,10 @@ def smart_scan(profile: str | None = None) -> None:
                 # Count scanned files (ClamAV outputs file paths)
                 if _should_count_as_scanned_file(line):
                     scanned_counter += 1
-                    progress.update(task, advance=1, description=f"[cyan]Scanned {scanned_counter} files...")
+                    # Update description every 50 files for better performance
+                    if scanned_counter % 50 == 0 or scanned_counter < 50:
+                        progress.update(task, advance=50 if scanned_counter >= 50 else 1, 
+                                      description=f"[cyan]Scanned {scanned_counter} files...")
                 
                 # Nur Funde oder Warnungen hervorheben
                 if line.endswith("FOUND"):
@@ -726,7 +742,10 @@ def scan_usb_drives() -> None:
                 # Count scanned files (ClamAV outputs file paths)
                 if _should_count_as_scanned_file(line):
                     scanned_counter += 1
-                    progress.update(task, advance=1, description=f"[cyan]Scanned {scanned_counter} files...")
+                    # Update description every 50 files for better performance
+                    if scanned_counter % 50 == 0 or scanned_counter < 50:
+                        progress.update(task, advance=50 if scanned_counter >= 50 else 1,
+                                      description=f"[cyan]Scanned {scanned_counter} files...")
                 
                 if line.endswith("FOUND"):
                     found_counter += 1
@@ -797,7 +816,10 @@ def scan_directory(path: str) -> None:
                 # Count scanned files (ClamAV outputs file paths)
                 if _should_count_as_scanned_file(line):
                     scanned_counter += 1
-                    progress.update(task, advance=1, description=f"[cyan]Scanned {scanned_counter} files...")
+                    # Update description every 50 files for better performance
+                    if scanned_counter % 50 == 0 or scanned_counter < 50:
+                        progress.update(task, advance=50 if scanned_counter >= 50 else 1,
+                                      description=f"[cyan]Scanned {scanned_counter} files...")
                 
                 if line.endswith("FOUND"):
                     found_counter += 1

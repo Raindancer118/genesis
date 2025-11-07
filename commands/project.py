@@ -863,18 +863,19 @@ def build_from_json(project_name, json_structure, use_git=False):
                 # It's a directory
                 target_path.mkdir(exist_ok=True)
                 create_structure(target_path, content)
-            elif content is None:
-                # It's an empty file
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                target_path.touch()
-            elif isinstance(content, str):
-                # It's a file with content
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                target_path.write_text(content)
             else:
-                console.print(f"[yellow]Warning: Unknown type for '{name}', treating as empty file[/yellow]")
+                # It's a file (empty or with content)
                 target_path.parent.mkdir(parents=True, exist_ok=True)
-                target_path.touch()
+                if content is None:
+                    # Empty file
+                    target_path.touch()
+                elif isinstance(content, str):
+                    # File with content
+                    target_path.write_text(content)
+                else:
+                    # Unknown type, treat as empty file
+                    console.print(f"[yellow]Warning: Unknown type for '{name}', treating as empty file[/yellow]")
+                    target_path.touch()
     
     create_structure(project_path, structure)
     

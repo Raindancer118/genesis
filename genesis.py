@@ -101,7 +101,6 @@ def new(name, template, use_git, yes, structure):
             name = click.prompt("Project name", type=str)
         
         # Check if structure is a file path or JSON string
-        structure_data = structure
         # First check if it looks like JSON (starts with { or [)
         if structure.strip().startswith('{') or structure.strip().startswith('['):
             # Treat as JSON string

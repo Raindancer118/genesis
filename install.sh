@@ -123,15 +123,9 @@ fi
 # 5) Initialize persistent storage directories
 # -------------------------------
 echo "📂 Initializing Genesis storage directories…"
-# Use Python to initialize storage directories properly
-sudo -u "${SUDO_USER_REAL}" "${VENV_DIR}/bin/python" -c "
-import sys
-sys.path.insert(0, '${INSTALL_DIR}')
-from commands.storage import initialize_storage_directories, get_storage_root, get_config_dir
-initialize_storage_directories()
-print(f'✅ Storage initialized at: {get_storage_root()}')
-print(f'✅ Configuration at: {get_config_dir()}')
-" || echo "⚠️  Could not initialize storage directories. They will be created on first use."
+# Use a dedicated Python script to avoid shell injection risks
+sudo -u "${SUDO_USER_REAL}" "${VENV_DIR}/bin/python" "${INSTALL_DIR}/init_storage.py" \
+  || echo "⚠️  Could not initialize storage directories. They will be created on first use."
 
 # -------------------------------
 # 6) Symlink anlegen

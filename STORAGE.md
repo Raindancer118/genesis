@@ -48,7 +48,10 @@ from commands.storage import (
     storage,                        # Global storage instance
     get_storage_root,              # Get data directory path
     get_config_dir,                # Get config directory path
-    initialize_storage_directories # Create all directories
+    initialize_storage_directories, # Create all directories
+    STORAGE_CACHE_DIR,             # "cache" subdirectory name
+    STORAGE_LOGS_DIR,              # "logs" subdirectory name
+    STORAGE_DATA_DIR,              # "data" subdirectory name
 )
 
 # Store and retrieve data
@@ -59,9 +62,10 @@ data = storage.get("my_key")
 data_dir = get_storage_root()  # e.g., ~/.local/share/genesis
 config_dir = get_config_dir()  # e.g., ~/.config/genesis
 
-# Store files in appropriate locations
-log_file = get_storage_root() / "logs" / "my_feature.log"
-cache_file = get_storage_root() / "cache" / "temp_data.json"
+# Store files in appropriate locations using constants
+log_file = get_storage_root() / STORAGE_LOGS_DIR / "my_feature.log"
+cache_file = get_storage_root() / STORAGE_CACHE_DIR / "temp_data.json"
+data_file = get_storage_root() / STORAGE_DATA_DIR / "persistent.db"
 ```
 
 ## Benefits

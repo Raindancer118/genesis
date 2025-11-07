@@ -8,6 +8,12 @@ from pathlib import Path
 from typing import Any, Dict
 
 
+# Storage subdirectory names
+STORAGE_CACHE_DIR = "cache"
+STORAGE_LOGS_DIR = "logs"
+STORAGE_DATA_DIR = "data"
+
+
 def get_storage_root() -> Path:
     """Get the root storage directory for Genesis.
     
@@ -66,9 +72,9 @@ def initialize_storage_directories() -> None:
     directories = [
         storage_root,
         config_dir,
-        storage_root / "cache",      # For temporary/cached data
-        storage_root / "logs",        # For log files
-        storage_root / "data",        # For other persistent data
+        storage_root / STORAGE_CACHE_DIR,
+        storage_root / STORAGE_LOGS_DIR,
+        storage_root / STORAGE_DATA_DIR,
     ]
     
     for directory in directories:
@@ -136,4 +142,7 @@ __all__ = [
     "get_storage_root",
     "get_config_dir",
     "initialize_storage_directories",
+    "STORAGE_CACHE_DIR",
+    "STORAGE_LOGS_DIR",
+    "STORAGE_DATA_DIR",
 ]

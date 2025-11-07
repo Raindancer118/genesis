@@ -120,14 +120,23 @@ else
 fi
 
 # -------------------------------
-# 5) Symlink anlegen
+# 5) Initialize persistent storage directories
+# -------------------------------
+echo "📂 Initializing Genesis storage directories…"
+# Use a dedicated Python script to avoid shell injection risks
+if ! sudo -u "${SUDO_USER_REAL}" "${VENV_DIR}/bin/python" "${INSTALL_DIR}/init_storage.py" 2>&1; then
+  echo "⚠️  Could not initialize storage directories. They will be created on first use."
+fi
+
+# -------------------------------
+# 6) Symlink anlegen
 # -------------------------------
 echo "🔗 Creating system-wide command link…"
 chmod +x "${INSTALL_DIR}/genesis.py"
 ln -sf "${INSTALL_DIR}/genesis.py" "${BIN_DIR}/${APP_NAME}"
 
 # -------------------------------
-# 6) systemd USER units zuverlässig aktivieren
+# 7) systemd USER units zuverlässig aktivieren
 #    (Fix für: DBUS_SESSION_BUS_ADDRESS / XDG_RUNTIME_DIR)
 # -------------------------------
 echo "🛠️  Preparing systemd user environment…"
@@ -171,7 +180,7 @@ sudo -u "${SUDO_USER_REAL}" \
   systemctl --user enable --now genesis-sentry.timer
 
 # -------------------------------
-# 7) Ownership fix
+# 8) Ownership fix
 # -------------------------------
 echo "🔒 Fix ownership…"
 chown -R "${SUDO_USER_REAL}:${SUDO_USER_REAL}" "${INSTALL_DIR}"

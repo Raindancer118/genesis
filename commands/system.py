@@ -1,5 +1,6 @@
 import subprocess
 import os
+import json
 from . import self_update
 from rich.progress import Progress  # Assuming python-rich is installed
 from rich.console import Console
@@ -372,18 +373,20 @@ def _get_usb_drives() -> List[Path]:
             return usb_mounts
         
         # Parse JSON output
-        import json
         data = json.loads(result.stdout)
         
         for device in data.get("blockdevices", []):
-            if device.get("tran") == "usb" and device.get("mountpoint"):
+            # Check if parent device is USB
+            is_usb_device = device.get("tran") == "usb"
+            
+            if is_usb_device and device.get("mountpoint"):
                 path = Path(device["mountpoint"])
                 if path.exists() and path.is_dir():
                     usb_mounts.append(path)
             
-            # Check children (partitions)
+            # Check children (partitions) - they inherit USB transport from parent
             for child in device.get("children", []):
-                if device.get("tran") == "usb" and child.get("mountpoint"):
+                if is_usb_device and child.get("mountpoint"):
                     path = Path(child["mountpoint"])
                     if path.exists() and path.is_dir():
                         usb_mounts.append(path)

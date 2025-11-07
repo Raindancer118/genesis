@@ -351,19 +351,32 @@ def run_self_update():
         
         if result.returncode == 0:
             console.print("✅ Update completed successfully.")
+            # If we had stashed changes, inform user about manual restoration
+            if stash_ref:
+                console.print(
+                    f"[yellow]ℹ️  Your local changes were stashed as '{stash_ref}'.[/yellow]"
+                )
+                console.print(
+                    "[yellow]After reviewing the update, you can restore them with:[/yellow]"
+                )
+                console.print(f"[yellow]  git -C {GENESIS_DIR} stash pop {stash_ref}[/yellow]")
         else:
             console.print(
                 f"[bold red]Update failed with exit code {result.returncode}."
                 " Review the installer output above for details.[/bold red]"
             )
+            # Only restore stash if update failed, since files weren't changed
+            restore_stash(stash_ref)
     except FileNotFoundError:
         console.print(
             "[bold red]sudo command not found. Please run the installer manually:[/bold red]"
         )
         console.print(f"  sudo {installer_path}")
+        # Restore stash since update didn't happen
+        restore_stash(stash_ref)
     except Exception as exc:
         console.print(
             f"[bold red]Unexpected error during update: {exc}[/bold red]"
         )
-    finally:
+        # Restore stash since update didn't happen
         restore_stash(stash_ref)

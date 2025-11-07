@@ -28,10 +28,12 @@ def get_storage_root() -> Path:
     Returns:
         Path to the storage root directory
     """
-    if env_storage := os.environ.get("GENESIS_STORAGE"):
+    env_storage = os.environ.get("GENESIS_STORAGE")
+    if env_storage:
         return Path(env_storage)
     
-    if xdg_data := os.environ.get("XDG_DATA_HOME"):
+    xdg_data = os.environ.get("XDG_DATA_HOME")
+    if xdg_data:
         return Path(xdg_data) / "genesis"
     
     return Path.home() / ".local" / "share" / "genesis"
@@ -50,10 +52,12 @@ def get_config_dir() -> Path:
     Returns:
         Path to the config directory
     """
-    if env_config := os.environ.get("GENESIS_CONFIG"):
+    env_config = os.environ.get("GENESIS_CONFIG")
+    if env_config:
         return Path(env_config)
     
-    if xdg_config := os.environ.get("XDG_CONFIG_HOME"):
+    xdg_config = os.environ.get("XDG_CONFIG_HOME")
+    if xdg_config:
         return Path(xdg_config) / "genesis"
     
     return Path.home() / ".config" / "genesis"

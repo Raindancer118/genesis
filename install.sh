@@ -124,8 +124,9 @@ fi
 # -------------------------------
 echo "📂 Initializing Genesis storage directories…"
 # Use a dedicated Python script to avoid shell injection risks
-sudo -u "${SUDO_USER_REAL}" "${VENV_DIR}/bin/python" "${INSTALL_DIR}/init_storage.py" \
-  || echo "⚠️  Could not initialize storage directories. They will be created on first use."
+if ! sudo -u "${SUDO_USER_REAL}" "${VENV_DIR}/bin/python" "${INSTALL_DIR}/init_storage.py" 2>&1; then
+  echo "⚠️  Could not initialize storage directories. They will be created on first use."
+fi
 
 # -------------------------------
 # 6) Symlink anlegen

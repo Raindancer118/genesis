@@ -235,10 +235,10 @@ def _decide_category(
             if learned_category:
                 memory_bucket[lookup_key] = learned_category
                 return learned_category, True
-
-    # 2. Check memory for a previously saved user choice (only for auto strategy)
-    if strategy == "auto" and lookup_key in memory_bucket:
-        return memory_bucket[lookup_key], False
+        
+        # 2. Check memory for a previously saved user choice (only for auto strategy)
+        if lookup_key in memory_bucket:
+            return memory_bucket[lookup_key], False
 
     # 3. For non-auto strategies, use the suggestion if available
     if strategy != "auto" and suggestion:
@@ -434,7 +434,9 @@ def _undo_sort(directory: Path, console: Console, auto_confirm: bool = False) ->
                 # Handle collision at original location
                 if source.exists():
                     # Find a new name for the file being moved back
-                    source = _resolve_collision(source.parent, source.name)
+                    new_source = _resolve_collision(source.parent, source.name)
+                    console.print(f"[yellow]⚠️  Collision: {source.name} restored as {new_source.name}[/yellow]")
+                    source = new_source
                 
                 shutil.move(str(destination), str(source))
                 success_count += 1

@@ -103,7 +103,6 @@ def build(name):
 @click.option('--yes', is_flag=True, help='Skip confirmation prompts.')
 def sort(path, strategy, undo, learn, yes):
     """Sorts files in a directory using an intelligent, interactive engine."""
-    # KORRIGIERT
     sort_module.sort_directory(path, strategy=strategy, undo=undo, learn_mode=learn, auto_confirm=yes)
 
 

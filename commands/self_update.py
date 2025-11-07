@@ -51,6 +51,15 @@ def _parse_int(value: str) -> int:
         raise GitCommandError(str(exc)) from exc
 
 
+def _is_git_repository() -> bool:
+    """Check if GENESIS_DIR is a valid git repository."""
+    try:
+        _run_git_command(["rev-parse", "--git-dir"], check=False)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
 def _resolve_tracking_branch() -> Optional[str]:
     """Return the upstream tracking ref for the current branch if set."""
 
@@ -86,9 +95,17 @@ def _collect_repo_status(*, fetch_remote: bool = True) -> RepoStatus:
         if fetch_remote:
             if tracking_branch and "/" in tracking_branch:
                 remote = tracking_branch.split("/", 1)[0]
-                _run_git_command(["fetch", "--prune", remote])
+                try:
+                    _run_git_command(["fetch", "--prune", remote])
+                except subprocess.CalledProcessError:
+                    # Try fetch without specifying remote
+                    _run_git_command(["fetch", "--prune"])
             else:
-                _run_git_command(["fetch", "--prune"])
+                try:
+                    _run_git_command(["fetch", "--prune"])
+                except subprocess.CalledProcessError:
+                    # If fetch fails, we can still check local status
+                    console.print("[yellow]Warning: Unable to fetch from remote. Checking local status only.[/yellow]")
 
         porcelain_result = _run_git_command(["status", "--porcelain"])
         behind_target = tracking_branch or "origin/main"
@@ -110,6 +127,17 @@ def check_for_updates(*, interactive: bool = True) -> Tuple[bool, Dict[str, Any]
 
     if interactive:
         console.print("🔎 Checking for updates to Genesis...")
+
+    # Check if we're in a git repository
+    if not _is_git_repository():
+        if interactive:
+            console.print(
+                "[bold red]Genesis installation is not a git repository.[/bold red]"
+            )
+            console.print(
+                "This may be a packaged installation. Self-update is only available for git-based installations."
+            )
+        return False, {"error": "Not a git repository"}
 
     try:
         status = _collect_repo_status(fetch_remote=True)
@@ -240,18 +268,44 @@ def run_self_update():
 
     console.print("🚀 Applying update via installer script…")
     installer_path = GENESIS_DIR / "install.sh"
-    try:
-        subprocess.run(["sudo", str(installer_path)], check=True)
-        console.print("✅ Update completed successfully.")
-    except FileNotFoundError:
+    
+    if not installer_path.exists():
         console.print(
             f"[bold red]Installer not found at {installer_path}."
             " Please verify your installation.[/bold red]"
         )
-    except subprocess.CalledProcessError as exc:
+        restore_stash(stash_ref)
+        return
+    
+    try:
+        # Check if installer is executable
+        if not os.access(installer_path, os.X_OK):
+            console.print("[yellow]Making installer script executable…[/yellow]")
+            os.chmod(installer_path, 0o755)
+        
+        # Run the installer with sudo
+        result = subprocess.run(
+            ["sudo", str(installer_path)], 
+            check=False,
+            capture_output=False,  # Let output go directly to console
+            text=True
+        )
+        
+        if result.returncode == 0:
+            console.print("✅ Update completed successfully.")
+        else:
+            console.print(
+                f"[bold red]Update failed with exit code {result.returncode}."
+                " Review the installer output above for details.[/bold red]"
+            )
+    except FileNotFoundError:
         console.print(
-            f"[bold red]Update failed with exit code {exc.returncode}."
-            " Review the installer output above for details.[/bold red]"
+            "[bold red]sudo command not found. Please run the installer manually:[/bold red]"
+        )
+        console.print(f"  sudo {installer_path}")
+    except Exception as exc:
+        console.print(
+            f"[bold red]Unexpected error during update: {exc}[/bold red]"
         )
     finally:
         restore_stash(stash_ref)

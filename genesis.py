@@ -41,6 +41,7 @@ from commands import sort as sort_module
 from commands import system
 from commands import self_update as self_update_module
 from commands import status as status_module
+from commands import hero as hero_module
 
 
 @click.group()
@@ -148,6 +149,27 @@ def monitor():
     """Background monitor task for the systemd service."""
     # KORRIGIERT
     status_module.run_background_check()
+
+
+@genesis.command()
+@click.option('--dry-run', is_flag=True, help='Preview targets without killing them.')
+@click.option('--scope', type=click.Choice(['user', 'all']), default='user', help='Process scope: user (default) or all.')
+@click.option('--mem-threshold', type=float, default=400.0, help='Memory threshold in MB (default: 400).')
+@click.option('--cpu-threshold', type=float, default=50.0, help='CPU threshold in percent (default: 50).')
+@click.option('--limit', type=int, default=15, help='Maximum number of targets (default: 15).')
+@click.option('--quiet', is_flag=True, help='Suppress verbose output.')
+@click.option('--fast', is_flag=True, help='Skip CPU sampling for faster execution.')
+def hero(dry_run, scope, mem_threshold, cpu_threshold, limit, quiet, fast):
+    """Kill resource-intensive processes to free up system resources."""
+    hero_module.run(
+        dry_run=dry_run,
+        scope=scope,
+        mem_threshold_mb=mem_threshold,
+        cpu_threshold=cpu_threshold,
+        limit=limit,
+        verbose=not quiet,
+        fast=fast,
+    )
 
 
 if __name__ == '__main__':

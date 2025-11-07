@@ -75,9 +75,55 @@ def greet():
     is_flag=True,
     help='Skip the final confirmation step when enough details are provided.'
 )
-def new(name, template, use_git, yes):
-    """Initializes a new project using an interactive wizard or provided options."""
-    project.create_project(name=name, template_key=template, use_git=use_git, auto_confirm=yes)
+@click.option(
+    '--structure',
+    help='JSON string or file path defining the project structure. If provided, ignores --template.'
+)
+def new(name, template, use_git, yes, structure):
+    """Initializes a new project using an interactive wizard or provided options.
+    
+    Can create projects from templates or from a custom JSON structure.
+    
+    JSON structure format:
+        {
+          "project-name": {
+            "src": {
+              "main.py": "print('Hello')",
+              "utils": {}
+            },
+            "README.md": null
+          }
+        }
+    """
+    if structure:
+        # Use JSON structure mode
+        if not name:
+            name = click.prompt("Project name", type=str)
+        
+        # Check if structure is a file path or JSON string
+        structure_data = structure
+        # First check if it looks like JSON (starts with { or [)
+        if structure.strip().startswith('{') or structure.strip().startswith('['):
+            # Treat as JSON string
+            structure_data = structure
+        else:
+            # Treat as file path
+            from pathlib import Path
+            structure_path = Path(structure)
+            if structure_path.exists():
+                structure_data = structure_path.read_text()
+            else:
+                click.echo(f"Error: File '{structure}' not found.")
+                return
+        
+        # Determine use_git if not specified
+        if use_git is None:
+            use_git = click.confirm("Initialize a Git repository?", default=True)
+        
+        project.build_from_json(name, structure_data, use_git=use_git)
+    else:
+        # Use template mode (existing behavior)
+        project.create_project(name=name, template_key=template, use_git=use_git, auto_confirm=yes)
 
 @genesis.command()
 @click.argument('name')

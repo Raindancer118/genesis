@@ -360,9 +360,9 @@ def _get_usb_drives() -> List[Path]:
     usb_mounts: List[Path] = []
     
     try:
-        # Use lsblk to get USB devices and their mount points
+        # Use lsblk with JSON output for reliable parsing
         result = subprocess.run(
-            ["lsblk", "-o", "NAME,TRAN,MOUNTPOINT", "-n", "-l"],
+            ["lsblk", "-J", "-o", "NAME,TRAN,MOUNTPOINT"],
             capture_output=True,
             text=True,
             check=False
@@ -371,13 +371,20 @@ def _get_usb_drives() -> List[Path]:
         if result.returncode != 0:
             return usb_mounts
         
-        for line in result.stdout.strip().split("\n"):
-            parts = line.split()
-            if len(parts) >= 3 and parts[1] == "usb":
-                # parts[2] onwards is the mountpoint
-                mountpoint = " ".join(parts[2:])
-                if mountpoint and mountpoint != "":
-                    path = Path(mountpoint)
+        # Parse JSON output
+        import json
+        data = json.loads(result.stdout)
+        
+        for device in data.get("blockdevices", []):
+            if device.get("tran") == "usb" and device.get("mountpoint"):
+                path = Path(device["mountpoint"])
+                if path.exists() and path.is_dir():
+                    usb_mounts.append(path)
+            
+            # Check children (partitions)
+            for child in device.get("children", []):
+                if device.get("tran") == "usb" and child.get("mountpoint"):
+                    path = Path(child["mountpoint"])
                     if path.exists() and path.is_dir():
                         usb_mounts.append(path)
         
@@ -733,7 +740,6 @@ def interactive_scan_menu() -> None:
     console.print("\n[bold cyan]🛡️  Genesis Virus Scanner[/bold cyan]")
     
     try:
-        import questionary
         choice = questionary.select(
             "Choose a scan option:",
             choices=[

@@ -97,10 +97,14 @@ def build(name):
 
 @genesis.command()
 @click.option('--path', default='.', help='The directory to sort. Defaults to the current directory.')
-def sort(path):
+@click.option('--strategy', type=click.Choice(['type', 'date', 'size', 'name', 'auto']), default='auto', help='Sorting strategy to use.')
+@click.option('--undo', is_flag=True, help='Undo the last sort operation in this directory.')
+@click.option('--learn', is_flag=True, help='Enter learning mode to manually categorize items.')
+@click.option('--yes', is_flag=True, help='Skip confirmation prompts.')
+def sort(path, strategy, undo, learn, yes):
     """Sorts files in a directory using an intelligent, interactive engine."""
     # KORRIGIERT
-    sort_module.sort_directory(path)
+    sort_module.sort_directory(path, strategy=strategy, undo=undo, learn_mode=learn, auto_confirm=yes)
 
 
 @genesis.command()

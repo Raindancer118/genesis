@@ -100,12 +100,22 @@ def _ensure_https_remote() -> bool:
         
         current_url = result.stdout.strip()
         
-        # If already HTTPS, we're good
+        # If already using the correct HTTPS URL, we're good
+        if current_url == REPO_HTTPS_URL or current_url == REPO_HTTPS_URL.rstrip(".git"):
+            return True
+        
+        # If already HTTPS but different URL, leave it alone
         if current_url.startswith("https://"):
             return True
         
-        # If SSH, try to convert to HTTPS (only if it's the same repo)
-        if "github.com" in current_url and "Raindancer118/genesis" in current_url:
+        # If SSH URL for the same repo, try to convert to HTTPS
+        # Match git@github.com:Raindancer118/genesis.git or git@github.com:Raindancer118/genesis
+        ssh_patterns = [
+            "git@github.com:Raindancer118/genesis.git",
+            "git@github.com:Raindancer118/genesis"
+        ]
+        
+        if current_url in ssh_patterns:
             try:
                 _run_git_command(["remote", "set-url", "origin", REPO_HTTPS_URL])
                 console.print("[yellow]Converted remote URL from SSH to HTTPS for better compatibility.[/yellow]")

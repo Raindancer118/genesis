@@ -162,6 +162,7 @@ def sort_directory(path: str, strategy: str = "auto", undo: bool = False, learn_
             suggestion = _suggest_category(item, strategy)
             chosen_category, changed = _decide_category(
                 item,
+                directory,
                 directory_memory,
                 suggestion=suggestion,
                 interactive=_interactive_session(),
@@ -211,6 +212,7 @@ def _discover_items(directory: Path) -> list[Path]:
 
 def _decide_category(
     item: Path,
+    directory: Path,
     memory: Dict[str, Dict[str, str]],
     *,
     suggestion: str | None,
@@ -224,23 +226,33 @@ def _decide_category(
     # Use name for folders, suffix for files as the lookup key
     lookup_key = item.name.lower() if item.is_dir() else (item.suffix.lower() or item.name.lower())
 
-    # 1. Check memory for a previously saved user choice (only for auto strategy)
+    # 1. Check learning data first (highest priority for auto strategy)
+    if strategy == "auto":
+        learning_data = storage.get(LEARNING_NAMESPACE, {})
+        directory_key = str(directory)
+        if directory_key in learning_data and item.name in learning_data[directory_key]:
+            learned_category = learning_data[directory_key][item.name].get("category")
+            if learned_category:
+                memory_bucket[lookup_key] = learned_category
+                return learned_category, True
+
+    # 2. Check memory for a previously saved user choice (only for auto strategy)
     if strategy == "auto" and lookup_key in memory_bucket:
         return memory_bucket[lookup_key], False
 
-    # 2. For non-auto strategies, use the suggestion if available
+    # 3. For non-auto strategies, use the suggestion if available
     if strategy != "auto" and suggestion:
         memory_bucket[lookup_key] = suggestion
         return suggestion, True
 
-    # 3. Apply hardcoded rules (FOLDER_MAPPINGS for dirs, FILE_MAPPINGS for files)
+    # 4. Apply hardcoded rules (FOLDER_MAPPINGS for dirs, FILE_MAPPINGS for files)
     category = None
     if item.is_dir():
         category = FOLDER_MAPPINGS.get(item.name)
     else:
         category = FILE_MAPPINGS.get(item.suffix.lower())
 
-    # 4. Use content analysis for suggestions (e.g., screenshots)
+    # 5. Use content analysis for suggestions (e.g., screenshots)
     if suggestion and suggestion != category:
         if interactive:
             pause_progress()
@@ -259,7 +271,7 @@ def _decide_category(
         else: # In non-interactive mode, trust the suggestion
             category = suggestion
 
-    # 5. If no category found yet, prompt the user
+    # 6. If no category found yet, prompt the user
     if category is None:
         if interactive:
             pause_progress()
@@ -268,7 +280,7 @@ def _decide_category(
         else:
             category = DEFAULT_CATEGORY
 
-    # 6. Save the final decision and return
+    # 7. Save the final decision and return
     final_category = category or DEFAULT_CATEGORY
     memory_bucket[lookup_key] = final_category
     return final_category, True

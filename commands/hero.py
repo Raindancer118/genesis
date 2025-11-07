@@ -78,10 +78,6 @@ def _is_safe_process(proc: psutil.Process) -> bool:
         # Protect kernel threads (names in brackets)
         if name.startswith("[") and name.endswith("]"):
             return True
-        
-        # Protect direct children of init
-        if proc.ppid() in ALWAYS_SAFE_PIDS:
-            return True
             
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         # If we can't determine safety, err on the side of caution
@@ -175,8 +171,8 @@ def find_targets(
                 targets.append(
                     Target(
                         pid=proc.pid,
-                        name=proc.info.get("name") or proc.name() or "?",
-                        username=proc.info.get("username") or proc.username() or "?",
+                        name=proc.name() or "?",
+                        username=proc.username() or "?",
                         rss_mb=rss,
                         cpu=cpu,
                         cmdline=_get_cmdline(proc),

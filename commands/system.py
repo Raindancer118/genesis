@@ -664,10 +664,12 @@ def smart_scan(profile: str | None = None) -> None:
                 # Count scanned files (ClamAV outputs file paths)
                 if _should_count_as_scanned_file(line):
                     scanned_counter += 1
+                    # Update progress bar (always advance by 1)
                     # Update description every 50 files for better performance
                     if scanned_counter % 50 == 0 or scanned_counter < 50:
-                        progress.update(task, advance=50 if scanned_counter >= 50 else 1, 
-                                      description=f"[cyan]Scanned {scanned_counter} files...")
+                        progress.update(task, advance=1, description=f"[cyan]Scanned {scanned_counter} files...")
+                    else:
+                        progress.update(task, advance=1)
                 
                 # Nur Funde oder Warnungen hervorheben
                 if line.endswith("FOUND"):
@@ -742,10 +744,12 @@ def scan_usb_drives() -> None:
                 # Count scanned files (ClamAV outputs file paths)
                 if _should_count_as_scanned_file(line):
                     scanned_counter += 1
+                    # Update progress bar (always advance by 1)
                     # Update description every 50 files for better performance
                     if scanned_counter % 50 == 0 or scanned_counter < 50:
-                        progress.update(task, advance=50 if scanned_counter >= 50 else 1,
-                                      description=f"[cyan]Scanned {scanned_counter} files...")
+                        progress.update(task, advance=1, description=f"[cyan]Scanned {scanned_counter} files...")
+                    else:
+                        progress.update(task, advance=1)
                 
                 if line.endswith("FOUND"):
                     found_counter += 1
@@ -816,10 +820,12 @@ def scan_directory(path: str) -> None:
                 # Count scanned files (ClamAV outputs file paths)
                 if _should_count_as_scanned_file(line):
                     scanned_counter += 1
+                    # Update progress bar (always advance by 1)
                     # Update description every 50 files for better performance
                     if scanned_counter % 50 == 0 or scanned_counter < 50:
-                        progress.update(task, advance=50 if scanned_counter >= 50 else 1,
-                                      description=f"[cyan]Scanned {scanned_counter} files...")
+                        progress.update(task, advance=1, description=f"[cyan]Scanned {scanned_counter} files...")
+                    else:
+                        progress.update(task, advance=1)
                 
                 if line.endswith("FOUND"):
                     found_counter += 1

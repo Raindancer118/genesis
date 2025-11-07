@@ -117,7 +117,6 @@ def scan(path):
         system.scan_usb_drives()
     else:
         # Specific path given - validate and scan that path
-        from pathlib import Path
         target = Path(path).resolve()
         if not target.exists():
             click.echo(f"Error: Path '{path}' does not exist.")

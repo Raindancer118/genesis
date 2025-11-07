@@ -360,6 +360,13 @@ def _get_usb_drives() -> List[Path]:
     """
     usb_mounts: List[Path] = []
     
+    def _add_mountpoint(mountpoint: str | None) -> None:
+        """Helper to validate and add a mountpoint to the list."""
+        if mountpoint:
+            path = Path(mountpoint)
+            if path.exists() and path.is_dir():
+                usb_mounts.append(path)
+    
     try:
         # Use lsblk with JSON output for reliable parsing
         result = subprocess.run(
@@ -379,17 +386,12 @@ def _get_usb_drives() -> List[Path]:
             # Check if parent device is USB
             is_usb_device = device.get("tran") == "usb"
             
-            if is_usb_device and device.get("mountpoint"):
-                path = Path(device["mountpoint"])
-                if path.exists() and path.is_dir():
-                    usb_mounts.append(path)
-            
-            # Check children (partitions) - they inherit USB transport from parent
-            for child in device.get("children", []):
-                if is_usb_device and child.get("mountpoint"):
-                    path = Path(child["mountpoint"])
-                    if path.exists() and path.is_dir():
-                        usb_mounts.append(path)
+            if is_usb_device:
+                _add_mountpoint(device.get("mountpoint"))
+                
+                # Check children (partitions) - they inherit USB transport from parent
+                for child in device.get("children", []):
+                    _add_mountpoint(child.get("mountpoint"))
         
     except Exception as e:
         console.print(f"[yellow]Warning: Could not detect USB drives: {e}[/yellow]")
@@ -776,7 +778,7 @@ def interactive_scan_menu() -> None:
     except (KeyboardInterrupt, EOFError):
         console.print("\n[yellow]Scan cancelled.[/yellow]")
     except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
+        console.print(f"[red]Error displaying interactive menu: {e}[/red]")
         console.print("[yellow]Falling back to 'core' scan.[/yellow]")
         smart_scan("core")
 

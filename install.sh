@@ -44,7 +44,16 @@ fi
 cd "${INSTALL_DIR}"
 
 # Determine current branch and tracking branch
-CURRENT_BRANCH="$(sudo -u "${SUDO_USER_REAL}" git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")"
+CURRENT_BRANCH="$(sudo -u "${SUDO_USER_REAL}" git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+if [[ -z "${CURRENT_BRANCH}" || "${CURRENT_BRANCH}" == "HEAD" ]]; then
+  # Detached HEAD state - try to get the default branch from remote
+  CURRENT_BRANCH="$(sudo -u "${SUDO_USER_REAL}" git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
+  if [[ -z "${CURRENT_BRANCH}" ]]; then
+    # Fallback to main if we can't determine
+    CURRENT_BRANCH="main"
+  fi
+fi
+
 TRACKING_BRANCH="$(sudo -u "${SUDO_USER_REAL}" git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "origin/${CURRENT_BRANCH}")"
 
 echo "🔄 Pulling updates als '${SUDO_USER_REAL}' (branch: ${CURRENT_BRANCH})…"

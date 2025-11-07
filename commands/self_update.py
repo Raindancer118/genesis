@@ -17,6 +17,9 @@ GENESIS_DIR = Path(os.environ.get("GENESIS_DIR", "/opt/genesis"))
 if not GENESIS_DIR.exists():
     GENESIS_DIR = _DEFAULT_INSTALL_DIR
 
+# Repository configuration
+REPO_HTTPS_URL = "https://github.com/Raindancer118/genesis.git"
+
 
 @dataclass
 class RepoStatus:
@@ -54,9 +57,9 @@ def _parse_int(value: str) -> int:
 def _is_git_repository() -> bool:
     """Check if GENESIS_DIR is a valid git repository."""
     try:
-        _run_git_command(["rev-parse", "--git-dir"], check=False)
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
+        result = _run_git_command(["rev-parse", "--git-dir"], check=False)
+        return result.returncode == 0
+    except (FileNotFoundError, PermissionError):
         return False
 
 
@@ -88,6 +91,34 @@ def _count_commits(range_expr: str) -> int:
     return _parse_int(result.stdout)
 
 
+def _ensure_https_remote() -> bool:
+    """Ensure the origin remote uses HTTPS for better compatibility."""
+    try:
+        result = _run_git_command(["remote", "get-url", "origin"], check=False)
+        if result.returncode != 0:
+            return False
+        
+        current_url = result.stdout.strip()
+        
+        # If already HTTPS, we're good
+        if current_url.startswith("https://"):
+            return True
+        
+        # If SSH, try to convert to HTTPS (only if it's the same repo)
+        if "github.com" in current_url and "Raindancer118/genesis" in current_url:
+            try:
+                _run_git_command(["remote", "set-url", "origin", REPO_HTTPS_URL])
+                console.print("[yellow]Converted remote URL from SSH to HTTPS for better compatibility.[/yellow]")
+                return True
+            except subprocess.CalledProcessError:
+                console.print("[yellow]Warning: Could not update remote URL to HTTPS.[/yellow]")
+                return False
+        
+        return True
+    except Exception:
+        return True  # Don't fail if we can't check
+
+
 def _collect_repo_status(*, fetch_remote: bool = True) -> RepoStatus:
     try:
         tracking_branch = _resolve_tracking_branch()
@@ -99,7 +130,11 @@ def _collect_repo_status(*, fetch_remote: bool = True) -> RepoStatus:
                     _run_git_command(["fetch", "--prune", remote])
                 except subprocess.CalledProcessError:
                     # Try fetch without specifying remote
-                    _run_git_command(["fetch", "--prune"])
+                    try:
+                        _run_git_command(["fetch", "--prune"])
+                    except subprocess.CalledProcessError:
+                        # If fetch fails, we can still check local status
+                        console.print("[yellow]Warning: Unable to fetch from remote. Checking local status only.[/yellow]")
             else:
                 try:
                     _run_git_command(["fetch", "--prune"])
@@ -138,6 +173,9 @@ def check_for_updates(*, interactive: bool = True) -> Tuple[bool, Dict[str, Any]
                 "This may be a packaged installation. Self-update is only available for git-based installations."
             )
         return False, {"error": "Not a git repository"}
+
+    # Ensure we're using HTTPS for the remote
+    _ensure_https_remote()
 
     try:
         status = _collect_repo_status(fetch_remote=True)

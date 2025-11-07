@@ -110,7 +110,7 @@ if [[ -n "${PYTHON_EXEC}" ]]; then
   if [[ -x "${VENV_PIP}" ]]; then
     sudo -u "${SUDO_USER_REAL}" "${VENV_PIP}" install --upgrade pip \
       || echo "⚠️  Pip-Upgrade im Virtualenv fehlgeschlagen."
-    sudo -u "${SUDO_USER_REAL}" "${VENV_PIP}" install --upgrade "${PYTHON_PACKAGES[@]}" \
+    sudo -u "${SUDO_USER_REAL}" "${VENV_PIP}" install "${PYTHON_PACKAGES[@]}" \
       || echo "⚠️  Python-Abhängigkeiten konnten nicht vollständig installiert werden."
   else
     echo "⚠️  Virtualenv wurde erstellt, aber pip fehlt. Bitte prüfen Sie die Python-Installation."

@@ -335,6 +335,7 @@ def run_self_update():
         restore_stash(stash_ref)
         return
     
+    update_succeeded = False
     try:
         # Check if installer is executable
         if not os.access(installer_path, os.X_OK):
@@ -350,7 +351,17 @@ def run_self_update():
         )
         
         if result.returncode == 0:
+            update_succeeded = True
             console.print("✅ Update completed successfully.")
+            # If we had stashed changes, inform user about manual restoration
+            if stash_ref:
+                console.print(
+                    f"[yellow]ℹ️  Your local changes were stashed as '{stash_ref}'.[/yellow]"
+                )
+                console.print(
+                    "[yellow]After reviewing the update, you can restore them with:[/yellow]"
+                )
+                console.print(f"[yellow]  git -C {GENESIS_DIR} stash apply {stash_ref}[/yellow]")
         else:
             console.print(
                 f"[bold red]Update failed with exit code {result.returncode}."
@@ -366,4 +377,6 @@ def run_self_update():
             f"[bold red]Unexpected error during update: {exc}[/bold red]"
         )
     finally:
-        restore_stash(stash_ref)
+        # Only restore stash if update failed (files weren't changed)
+        if not update_succeeded:
+            restore_stash(stash_ref)

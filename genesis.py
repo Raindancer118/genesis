@@ -149,10 +149,24 @@ def sort(path):
 
 
 @genesis.command()
-@click.argument('path', type=click.Path(exists=True, resolve_path=True))
+@click.argument('path', required=False)
 def scan(path):
-    """Scans a directory for viruses with clamscan, showing progress."""
-    system.scan_directory(path)
+    """Scans for viruses. If no path is given, shows an interactive menu.
+    
+    You can also use 'genesis scan usb' to scan USB drives."""
+    if path is None:
+        # No argument given - show interactive menu
+        system.interactive_scan_menu()
+    elif path.lower() == "usb":
+        # Special case for USB scanning
+        system.scan_usb_drives()
+    else:
+        # Specific path given - validate and scan that path
+        target = Path(path).resolve()
+        if not target.exists():
+            click.echo(f"Error: Path '{path}' does not exist.")
+            raise click.Abort()
+        system.scan_directory(str(target))
 
 
 @genesis.command()

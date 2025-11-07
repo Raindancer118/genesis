@@ -43,6 +43,11 @@ if [[ ! -d "${INSTALL_DIR}" ]]; then
 fi
 cd "${INSTALL_DIR}"
 
+# Fix ownership before git operations to avoid permission errors
+if [[ -d "${INSTALL_DIR}/.git" ]]; then
+  chown -R "${SUDO_USER_REAL}:${SUDO_USER_REAL}" "${INSTALL_DIR}"
+fi
+
 # Determine current branch and tracking branch
 CURRENT_BRANCH="$(sudo -u "${SUDO_USER_REAL}" git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 if [[ -z "${CURRENT_BRANCH}" || "${CURRENT_BRANCH}" == "HEAD" ]]; then

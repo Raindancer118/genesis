@@ -1,5 +1,7 @@
 import subprocess
 import os
+import re
+import datetime
 from . import self_update
 from rich.progress import Progress  # Assuming python-rich is installed
 from rich.console import Console
@@ -222,39 +224,229 @@ def remove_packages(packages):
 
 
 # --- UPDATED update_system FUNCTION ---
-def update_system():
-    """Performs a full system update tailored to the available package manager."""
+
+def _update_mirrors():
+    """Updates mirror list if reflector is available."""
+    if not shutil.which('reflector'):
+        return
+
+    console.print("\n[bold cyan]🌍 Updating mirrors (Reflector)...[/bold cyan]")
+    try:
+        # Arch Linux specific: Update /etc/pacman.d/mirrorlist
+        # Requires root usually, so strictly speaking we might need sudo.
+        # Reflector usually needs root to write to /etc/pacman.d/mirrorlist
+        cmd = [
+            'sudo', 'reflector',
+            '--latest', '20',
+            '--protocol', 'https',
+            '--sort', 'rate',
+            '--save', '/etc/pacman.d/mirrorlist'
+        ]
+        _run_command(cmd)
+        console.print("[green]Mirrors updated.[/green]")
+    except Exception as e:
+        console.print(f"[red]Failed to update mirrors: {e}[/red]")
+
+
+def _manage_timeshift():
+    """Creates a Timeshift snapshot and deletes the oldest one."""
+    if not shutil.which('timeshift'):
+        return
+
+    console.print("\n[bold cyan]🕒 Managing Timeshift snapshots...[/bold cyan]")
+
+    # 1. Create Snapshot
+    console.print("Creating new snapshot...")
+    try:
+        _run_command(['sudo', 'timeshift', '--create', '--comments', 'Genesis Update'])
+    except Exception:
+        console.print("[red]Failed to create snapshot.[/red]")
+        # We continue even if creation fails? Maybe better to warn.
+        if not questionary.confirm("Snapshot creation failed. Continue with update?", default=False).ask():
+            raise KeyboardInterrupt("Update cancelled by user.")
+
+    # 2. Delete Oldest (Pruning)
+    # We need to parse 'timeshift --list'
+    # Output format is typically:
+    # Num  Name                 Tags  Description
+    # ------------------------------------------------------------------------------
+    # 0    >  2023-10-25_10-00-01  O     ...
+    # 1    >  2023-11-01_12-00-00  D     ...
+    
+    console.print("Checking for old snapshots to prune...")
+    try:
+        res = subprocess.run(['sudo', 'timeshift', '--list'], capture_output=True, text=True)
+        lines = res.stdout.splitlines()
+        
+        snapshots = []
+        # Basic parsing strategy: Look for date-like lines
+        # Regex for 'YYYY-MM-DD_HH-MM-SS'
+        # Captures the timestamp from the typical timeshift output
+        timestamp_re = re.compile(r'(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})')
+        
+        for line in lines:
+            match = timestamp_re.search(line)
+            if match:
+                snapshots.append(match.group(1))
+
+        # Check if we have snapshots to delete
+        # Policy: "delete the oldest one" implies we want to keep some?
+        # The user said "den ältesten löschen, der vorhanden ist" (delete the oldest one that exists).
+        # Assuming we just delete ONE oldest snapshot to save space? Or just cleanup?
+        # Usually Timeshift handles rotation automatically, but the user explicitly asked for this.
+        # I will delete the *single* oldest snapshot found.
+        
+        if snapshots:
+            # Sort just in case, though usually listed chronologically? 
+            # String comparison works for ISO-like dates used by Timeshift.
+            snapshots.sort()
+            oldest = snapshots[0]
+            
+            # Don't delete the one we just created if it's the only one!
+            # If len > 1, allow deleting the oldest.
+            if len(snapshots) > 1:
+                console.print(f"Deleting oldest snapshot: [bold]{oldest}[/bold]")
+                _run_command(['sudo', 'timeshift', '--delete', '--snapshot', oldest])
+            else:
+                console.print("[dim]Only one snapshot exists (likely the one just created). Skipping deletion.[/dim]")
+        else:
+            console.print("[dim]No snapshots found to delete.[/dim]")
+
+    except Exception as e:
+        console.print(f"[yellow]Error managing timeshift deletion: {e}[/yellow]")
+
+
+def update_system(affirmative: bool = False):
+    """Performs a full system update tailored to ALL available package managers."""
     console.print("🚀 Starting comprehensive system update...")
 
-    if not questionary.confirm("Proceed with full system update?").ask():
+    if not affirmative and not questionary.confirm("Proceed with full system update?").ask():
         console.print("Update cancelled.")
         return
 
-    if PAMAC_AVAILABLE:
-        console.print("\n--- [bold cyan]Updating Pacman/AUR packages with Pamac[/bold cyan] ---")
-        _run_command(['pamac', 'upgrade'])
-    elif PACMAN_AVAILABLE:
-        console.print("\n--- [bold cyan]Updating Pacman packages[/bold cyan] ---")
-        _run_command(['sudo', 'pacman', '-Syu'])
-    elif APT_AVAILABLE:
-        console.print("\n--- [bold cyan]Updating APT packages[/bold cyan] ---")
-        _run_command(['sudo', *_apt_command('update')])
-        _run_command(['sudo', *_apt_command('upgrade', assume_yes=True)])
-        _run_command(['sudo', *_apt_command('autoremove', assume_yes=True)])
-    else:
-        console.print("[bold red]No supported package manager found for updates.[/bold red]")
+    # 1. Mirrors
+    _update_mirrors()
 
-    if shutil.which('flatpak'):
-        console.print("\n--- [bold cyan]Updating Flatpak packages[/bold cyan] ---")
-        _run_command(['flatpak', 'update', '-y'])
-    else:
-        console.print("\n[dim]Flatpak not found, skipping.[/dim]")
+    # 2. Timeshift
+    try:
+        _manage_timeshift()
+    except KeyboardInterrupt:
+        console.print("[bold red]Aborted.[/bold red]")
+        return
+    
+    # Wait automatically if affirmative, or we could skip wait?
+    # Usually mirror updates happen fast. Timeshift takes time.
+    # The user asked for "make -y to simply run through all steps automatically"
+    
+    console.print("\n[bold cyan]📦 Updating Package Managers...[/bold cyan]")
 
-    if shutil.which('snap'):
-        console.print("\n--- [bold cyan]Updating Snap packages[/bold cyan] ---")
-        _run_command(['sudo', 'snap', 'refresh'])
-    else:
-        console.print("\n[dim]Snap not found, skipping.[/dim]")
+    # Helper to run updates
+    def run_update(name, cmd_list, check_start=None):
+        """Runs an update command if the tool exists."""
+        # Optional: check dependent command first
+        bin_name = check_start if check_start else cmd_list[0]
+        if bin_name == 'sudo':
+             bin_name = cmd_list[1]
+             
+        if shutil.which(bin_name):
+            console.print(f"\n--- [bold magenta]Updating {name} ({bin_name})[/bold magenta] ---")
+            try:
+                # Add auto-confirm flags if affirmative
+                final_cmd = cmd_list.copy()
+                if affirmative:
+                    if bin_name in ['pacman', 'paru', 'yay']:
+                        if '--noconfirm' not in final_cmd:
+                            final_cmd.append('--noconfirm')
+                    elif bin_name == 'pamac':
+                        if '--no-confirm' not in final_cmd:
+                            final_cmd.append('--no-confirm')
+                    elif bin_name == 'dnf':
+                        if '-y' not in final_cmd:
+                            final_cmd.append('-y')
+                    # apt, flatpak, snap usually handled individually below or have flags added manually
+
+                _run_command(final_cmd)
+            except Exception as e:
+                console.print(f"[red]Error updating {name}: {e}[/red]")
+        
+    # --- Arch / System ---
+    # Priority: Paru > Yay > Pamac > Pacman
+    # Since these are mutually exclusive mostly for the "same" database, we pick the "best" one.
+    arch_updated = False
+    
+    if shutil.which("paru"):
+        run_update("Arch System (Paru)", ["paru", "-Syu"])
+        arch_updated = True
+    elif shutil.which("yay"):
+        run_update("Arch System (Yay)", ["yay", "-Syu"])
+        arch_updated = True
+    elif shutil.which("pamac"):
+        run_update("Arch System (Pamac)", ["pamac", "upgrade"])
+        arch_updated = True
+    elif shutil.which("pacman"):
+        run_update("Arch System (Pacman)", ["sudo", "pacman", "-Syu"])
+        arch_updated = True
+
+    # --- Debian / Ubuntu ---
+    # Nala > Apt
+    if not arch_updated: # Don't run apt if we are on Arch, usually. But `genesis` might check availability.
+        # Strict separation: If apt exists, run it.
+        if shutil.which("nala"):
+             run_update("Debian System (Nala)", ["sudo", "nala", "upgrade"]) # nala upgrade includes update normally or asks
+        elif shutil.which("apt"):
+             console.print("\n--- [bold magenta]Updating Debian System (Apt)[/bold magenta] ---")
+             _run_command(['sudo', *_apt_command('update')])
+             _run_command(['sudo', *_apt_command('upgrade', assume_yes=True)])
+             _run_command(['sudo', *_apt_command('autoremove', assume_yes=True)])
+
+    # --- Fedora ---
+    run_update("Fedora System (DNF)", ["sudo", "dnf", "upgrade", "--refresh"])
+
+    # --- Universal ---
+    run_update("Flatpak", ["flatpak", "update", "-y"])
+    run_update("Snap", ["sudo", "snap", "refresh"])
+
+    # --- Language Specific ---
+    
+    # Rust (Cargo)
+    # Check for cargo-install-update
+    if shutil.which("cargo"):
+        # Check if cargo-install-update is installed
+        # It's a subcommand: `cargo install-update`
+        # We can try running it or check `cargo --list`
+        try:
+            res = subprocess.run(["cargo", "install-update", "--version"], capture_output=True)
+            if res.returncode == 0:
+                # -a = all, -g = git? usually -a is enough for cargo-update
+                run_update("Rust Crates (Cargo)", ["cargo", "install-update", "-a"])
+            else:
+                 console.print("\n[dim]Cargo found, but 'cargo-update' crate not installed. Skipping crate updates. (Install with `cargo install cargo-update`)[/dim]")
+        except FileNotFoundError:
+             pass
+
+    # Node (NPM)
+    # Global updates
+    if shutil.which("npm"):
+        # Often requires sudo for global
+        # We will try with sudo.
+        run_update("Node Packages (NPM Global)", ["sudo", "npm", "update", "-g"])
+
+    # Ruby (Gem)
+    run_update("Ruby Gems", ["gem", "update"])
+    
+    # Python (Pip)
+    # Updating pip itself
+    if shutil.which("pip") or shutil.which("pip3"):
+        pip_cmd = "pip" if shutil.which("pip") else "pip3"
+        # Often dangerous to update system pip.
+        # But user asked for "everything".
+        # Safer: pipx upgrade-all
+        if shutil.which("pipx"):
+             run_update("Python Tools (Pipx)", ["pipx", "upgrade-all"])
+        
+        # We'll skip forcing 'pip install --upgrade pip' globally to avoid breaking distro-managed pip.
+        console.print(f"\n[dim]Skipping global 'pip' self-update to protect system integrity. Use 'pipx' for global tools.[/dim]")
+
 
     console.print("\n✅ Full system update process complete.")
 

@@ -124,9 +124,10 @@ def remove(packages):
 
 
 @genesis.command()
-def update():
+@click.option('-y', '--yes', is_flag=True, help='Automatically answer yes to all prompts.')
+def update(yes):
     """Performs a full system update (official repos + AUR)."""
-    system.update_system()
+    system.update_system(affirmative=yes)
 
 
 @genesis.command()

@@ -29,7 +29,7 @@ USER_UID="$(id -u "${SUDO_USER_REAL}")"
 # -------------------------------
 # 2) Config
 # -------------------------------
-REPO_URL="git@github.com:Raindancer118/genesis.git"
+REPO_URL="https://github.com/Raindancer118/genesis.git"
 INSTALL_DIR="/opt/genesis"
 BIN_DIR="/usr/local/bin"
 APP_NAME="genesis"
@@ -42,8 +42,34 @@ if [[ ! -d "${INSTALL_DIR}" ]]; then
   sudo -u "${SUDO_USER_REAL}" git clone "${REPO_URL}" "${INSTALL_DIR}"
 fi
 cd "${INSTALL_DIR}"
-echo "🔄 Pulling updates als '${SUDO_USER_REAL}'…"
-sudo -u "${SUDO_USER_REAL}" git pull --ff-only origin main
+
+# Fix ownership before git operations to avoid permission errors
+if [[ -d "${INSTALL_DIR}/.git" ]]; then
+  chown -R "${SUDO_USER_REAL}:${SUDO_USER_REAL}" "${INSTALL_DIR}"
+fi
+
+# Determine current branch and tracking branch
+CURRENT_BRANCH="$(sudo -u "${SUDO_USER_REAL}" git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+if [[ -z "${CURRENT_BRANCH}" || "${CURRENT_BRANCH}" == "HEAD" ]]; then
+  # Detached HEAD state - try to get the default branch from remote
+  CURRENT_BRANCH="$(sudo -u "${SUDO_USER_REAL}" git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
+  if [[ -z "${CURRENT_BRANCH}" ]]; then
+    # Fallback to main if we can't determine
+    CURRENT_BRANCH="main"
+  fi
+fi
+
+TRACKING_BRANCH="$(sudo -u "${SUDO_USER_REAL}" git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "origin/${CURRENT_BRANCH}")"
+
+echo "🔄 Pulling updates as '${SUDO_USER_REAL}' (branch: ${CURRENT_BRANCH})…"
+if sudo -u "${SUDO_USER_REAL}" git pull --ff-only "${TRACKING_BRANCH%%/*}" "${CURRENT_BRANCH}" 2>/dev/null; then
+  echo "✅ Git pull successful."
+else
+  echo "⚠️  Fast-forward pull failed. Trying standard pull…"
+  sudo -u "${SUDO_USER_REAL}" git pull "${TRACKING_BRANCH%%/*}" "${CURRENT_BRANCH}" || {
+    echo "❌ Git pull failed. Continuing with current version…"
+  }
+fi
 
 # -------------------------------
 # 4) Dependencies
@@ -84,7 +110,7 @@ if [[ -n "${PYTHON_EXEC}" ]]; then
   if [[ -x "${VENV_PIP}" ]]; then
     sudo -u "${SUDO_USER_REAL}" "${VENV_PIP}" install --upgrade pip \
       || echo "⚠️  Pip-Upgrade im Virtualenv fehlgeschlagen."
-    sudo -u "${SUDO_USER_REAL}" "${VENV_PIP}" install --upgrade "${PYTHON_PACKAGES[@]}" \
+    sudo -u "${SUDO_USER_REAL}" "${VENV_PIP}" install "${PYTHON_PACKAGES[@]}" \
       || echo "⚠️  Python-Abhängigkeiten konnten nicht vollständig installiert werden."
   else
     echo "⚠️  Virtualenv wurde erstellt, aber pip fehlt. Bitte prüfen Sie die Python-Installation."

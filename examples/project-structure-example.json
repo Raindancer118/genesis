@@ -1,0 +1,48 @@
+{
+  "my-project": {
+    "src": {
+      "main": {
+        "java": {
+          "com": {
+            "example": {
+              "myapp": {
+                "Main.java": "package com.example.myapp;\n\npublic class Main {\n    public static void main(String[] args) {\n        System.out.println(\"Hello World!\");\n    }\n}",
+                "controller": {
+                  "UserController.java": "package com.example.myapp.controller;\n\npublic class UserController {\n    // Controller logic here\n}"
+                },
+                "model": {
+                  "User.java": "package com.example.myapp.model;\n\npublic class User {\n    private String name;\n    private String email;\n    \n    // Getters and setters\n}"
+                },
+                "service": {
+                  "UserService.java": "package com.example.myapp.service;\n\npublic class UserService {\n    // Service logic here\n}"
+                }
+              }
+            }
+          }
+        },
+        "resources": {
+          "application.properties": "spring.application.name=my-project\nserver.port=8080\n",
+          "static": {},
+          "templates": {}
+        }
+      },
+      "test": {
+        "java": {
+          "com": {
+            "example": {
+              "myapp": {
+                "MainTest.java": "package com.example.myapp;\n\nimport org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.*;\n\nclass MainTest {\n    @Test\n    void testMain() {\n        assertTrue(true);\n    }\n}"
+              }
+            }
+          }
+        },
+        "resources": {
+          "application-test.properties": "spring.application.name=my-project-test\n"
+        }
+      }
+    },
+    "pom.xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<project xmlns=\"http://maven.apache.org/POM/4.0.0\">\n    <modelVersion>4.0.0</modelVersion>\n    <groupId>com.example</groupId>\n    <artifactId>my-project</artifactId>\n    <version>0.1.0</version>\n    <properties>\n        <maven.compiler.source>17</maven.compiler.source>\n        <maven.compiler.target>17</maven.compiler.target>\n    </properties>\n</project>\n",
+    "README.md": "# My Project\n\nA sample Java project created with Genesis using JSON structure.\n\n## Usage\n\nTo create a project from this structure:\n\n```bash\ngenesis new --name my-project --structure project-structure-example.json\n```\n\nOr use a JSON string directly:\n\n```bash\ngenesis new --name my-project --structure '{\"my-project\": {\"src\": {\"main.py\": \"print('Hello')\"}, \"README.md\": \"# Project\"}}'\n```\n",
+    ".gitignore": "target/\n*.class\n*.log\n.idea/\n.vscode/\n"
+  }
+}

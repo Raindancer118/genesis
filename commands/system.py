@@ -2,6 +2,7 @@ import subprocess
 import os
 import re
 import datetime
+import json
 from . import self_update
 from rich.progress import Progress  # Assuming python-rich is installed
 from rich.console import Console
@@ -544,6 +545,59 @@ def _confirm(prompt: str) -> bool:
         # Non-interaktiv: still zustimmen
         return True
 
+def _get_usb_drives() -> List[Path]:
+    """
+    Detects and returns a list of mounted USB drive paths.
+    Uses lsblk to identify USB devices and their mount points.
+    """
+    usb_mounts: List[Path] = []
+    
+    def _add_mountpoint(mountpoint: str | None) -> None:
+        """Helper to validate and add a mountpoint to the list."""
+        if mountpoint:
+            path = Path(mountpoint)
+            if path.exists() and path.is_dir():
+                usb_mounts.append(path)
+    
+    try:
+        # Use lsblk with JSON output for reliable parsing
+        result = subprocess.run(
+            ["lsblk", "-J", "-o", "NAME,TRAN,MOUNTPOINT"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        
+        if result.returncode != 0:
+            return usb_mounts
+        
+        # Parse JSON output
+        data = json.loads(result.stdout)
+        
+        for device in data.get("blockdevices", []):
+            # Check if parent device is USB
+            is_usb_device = device.get("tran") == "usb"
+            
+            if is_usb_device:
+                _add_mountpoint(device.get("mountpoint"))
+                
+                # Check children (partitions) - they inherit USB transport from parent
+                for child in device.get("children", []):
+                    _add_mountpoint(child.get("mountpoint"))
+        
+    except Exception as e:
+        console.print(f"[yellow]Warning: Could not detect USB drives: {e}[/yellow]")
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_mounts = []
+    for mount in usb_mounts:
+        if mount not in seen:
+            seen.add(mount)
+            unique_mounts.append(mount)
+    
+    return unique_mounts
+
 # =========================
 # freshclam
 # =========================
@@ -784,6 +838,68 @@ def smart_scan(profile: str | None = None) -> None:
                       "You can quarantine or delete with clamscan options like --remove or move to a quarantine dir. "
                       "I kept scans read-only by default.")
 
+def scan_usb_drives() -> None:
+    """
+    Scans all connected USB drives for viruses.
+    """
+    usb_drives = _get_usb_drives()
+    
+    if not usb_drives:
+        console.print("[yellow]No USB drives detected.[/yellow]")
+        return
+    
+    console.print("\n[bold cyan]🔌 Detected USB drives:[/bold cyan]")
+    for drive in usb_drives:
+        console.print(f" • {drive}")
+    
+    if not _confirm("\nProceed with scanning these USB drives?"):
+        console.print("[yellow]Scan cancelled.[/yellow]")
+        return
+    
+    # Always update signatures first
+    _run_freshclam()
+    
+    # Build command
+    scanner, base_flags = _best_scanner()
+    args = [scanner] + base_flags + ["--stdout", "--infected"]
+    args += _exclude_args()
+    args += list(_QUICK_LIMITS)
+    args += [str(p) for p in usb_drives]
+    
+    console.print("\n[bold cyan]🚀 Scanning USB drives…[/bold cyan]")
+    console.print(f"[dim]{shlex.join(args)}[/dim]")
+    
+    # Streaming-Ausgabe
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    found_counter = 0
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            if line.endswith("FOUND"):
+                found_counter += 1
+                console.print(f"[bold red]{line}[/bold red]")
+            elif "WARNING:" in line:
+                console.print(f"[yellow]{line}[/yellow]")
+    finally:
+        stdout, stderr = proc.communicate()
+    
+    if proc.returncode not in (0, 1):
+        console.print(f"[bold red]Scanner error (exit {proc.returncode}).[/bold red]")
+        if stderr:
+            console.print(stderr.strip())
+        return
+    
+    # Summary
+    summary = _summarize_scan(stdout or "")
+    console.print("\n[bold green]— Scan Summary —[/bold green]")
+    console.print(summary if summary else f"Found: {found_counter}")
+    
+    if found_counter > 0:
+        console.print("\n[bold yellow]Action:[/bold yellow] Review detections. "
+                      "You can quarantine or delete with clamscan options like --remove or move to a quarantine dir. "
+                      "I kept scans read-only by default.")
+
 # Optional: Behalte deine alte Funktion, aber leite um:
 def scan_directory(path: str) -> None:
     """
@@ -812,6 +928,51 @@ def scan_directory(path: str) -> None:
     proc = subprocess.run(args, capture_output=True, text=True)
     print("\n--- Scan Summary ---")
     print(_summarize_scan(proc.stdout))
+
+
+def interactive_scan_menu() -> None:
+    """
+    Presents an interactive menu for scan options using arrow keys for navigation.
+    """
+    console.print("\n[bold cyan]🛡️  Genesis Virus Scanner[/bold cyan]")
+    
+    try:
+        choice = questionary.select(
+            "Choose a scan option:",
+            choices=[
+                ("Scan USB drives (connected USB devices)", "usb"),
+                ("Scan daily use areas (Downloads, Documents, Desktop, etc.)", "daily"),
+                ("Scan system core (fast, essential system areas)", "core"),
+                ("Scan home directory (remaining areas in your home)", "rest"),
+                ("Scan root directory (detailed scan of /)", "root"),
+                ("Full system scan (slow, comprehensive scan)", "full"),
+                ("Cancel", "cancel"),
+            ],
+        ).ask()
+        
+        if choice == "usb":
+            scan_usb_drives()
+        elif choice == "daily":
+            smart_scan("daily")
+        elif choice == "core":
+            smart_scan("core")
+        elif choice == "rest":
+            smart_scan("rest")
+        elif choice == "root":
+            console.print("\n[bold cyan]Scanning root directory /[/bold cyan]")
+            scan_directory("/")
+        elif choice == "full":
+            smart_scan("full")
+        elif choice == "cancel" or choice is None:
+            console.print("[yellow]Scan cancelled.[/yellow]")
+        else:
+            console.print(f"[red]Invalid choice '{choice}'.[/red]")
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[yellow]Scan cancelled.[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Error displaying interactive menu: {e}[/red]")
+        console.print("[yellow]Falling back to 'core' scan.[/yellow]")
+        smart_scan("core")
 
 
 def install_package(package):

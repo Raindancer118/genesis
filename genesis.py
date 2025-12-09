@@ -41,6 +41,7 @@ from commands import sort as sort_module
 from commands import system
 from commands import self_update as self_update_module
 from commands import status as status_module
+from commands import hero as hero_module
 
 
 @click.group()
@@ -74,9 +75,54 @@ def greet():
     is_flag=True,
     help='Skip the final confirmation step when enough details are provided.'
 )
-def new(name, template, use_git, yes):
-    """Initializes a new project using an interactive wizard or provided options."""
-    project.create_project(name=name, template_key=template, use_git=use_git, auto_confirm=yes)
+@click.option(
+    '--structure',
+    help='JSON string or file path defining the project structure. If provided, ignores --template.'
+)
+def new(name, template, use_git, yes, structure):
+    """Initializes a new project using an interactive wizard or provided options.
+    
+    Can create projects from templates or from a custom JSON structure.
+    
+    JSON structure format:
+        {
+          "project-name": {
+            "src": {
+              "main.py": "print('Hello')",
+              "utils": {}
+            },
+            "README.md": null
+          }
+        }
+    """
+    if structure:
+        # Use JSON structure mode
+        if not name:
+            name = click.prompt("Project name", type=str)
+        
+        # Check if structure is a file path or JSON string
+        # First check if it looks like JSON (starts with { or [)
+        if structure.strip().startswith('{') or structure.strip().startswith('['):
+            # Treat as JSON string
+            structure_data = structure
+        else:
+            # Treat as file path
+            from pathlib import Path
+            structure_path = Path(structure)
+            if structure_path.exists():
+                structure_data = structure_path.read_text()
+            else:
+                click.echo(f"Error: File '{structure}' not found.")
+                return
+        
+        # Determine use_git if not specified
+        if use_git is None:
+            use_git = click.confirm("Initialize a Git repository?", default=True)
+        
+        project.build_from_json(name, structure_data, use_git=use_git)
+    else:
+        # Use template mode (existing behavior)
+        project.create_project(name=name, template_key=template, use_git=use_git, auto_confirm=yes)
 
 @genesis.command()
 @click.argument('name')
@@ -103,10 +149,24 @@ def sort(path):
 
 
 @genesis.command()
-@click.argument('path', type=click.Path(exists=True, resolve_path=True))
+@click.argument('path', required=False)
 def scan(path):
-    """Scans a directory for viruses with clamscan, showing progress."""
-    system.scan_directory(path)
+    """Scans for viruses. If no path is given, shows an interactive menu.
+    
+    You can also use 'genesis scan usb' to scan USB drives."""
+    if path is None:
+        # No argument given - show interactive menu
+        system.interactive_scan_menu()
+    elif path.lower() == "usb":
+        # Special case for USB scanning
+        system.scan_usb_drives()
+    else:
+        # Specific path given - validate and scan that path
+        target = Path(path).resolve()
+        if not target.exists():
+            click.echo(f"Error: Path '{path}' does not exist.")
+            raise click.Abort()
+        system.scan_directory(str(target))
 
 
 @genesis.command()
@@ -149,6 +209,27 @@ def monitor():
     """Background monitor task for the systemd service."""
     # KORRIGIERT
     status_module.run_background_check()
+
+
+@genesis.command()
+@click.option('--dry-run', is_flag=True, help='Preview targets without killing them.')
+@click.option('--scope', type=click.Choice(['user', 'all']), default='user', help='Process scope: user (default) or all.')
+@click.option('--mem-threshold', type=float, default=400.0, help='Memory threshold in MB (default: 400).')
+@click.option('--cpu-threshold', type=float, default=50.0, help='CPU threshold in percent (default: 50).')
+@click.option('--limit', type=int, default=15, help='Maximum number of targets (default: 15).')
+@click.option('--quiet', is_flag=True, help='Suppress verbose output.')
+@click.option('--fast', is_flag=True, help='Skip CPU sampling for faster execution.')
+def hero(dry_run, scope, mem_threshold, cpu_threshold, limit, quiet, fast):
+    """Kill resource-intensive processes to free up system resources."""
+    hero_module.run(
+        dry_run=dry_run,
+        scope=scope,
+        mem_threshold_mb=mem_threshold,
+        cpu_threshold=cpu_threshold,
+        limit=limit,
+        verbose=not quiet,
+        fast=fast,
+    )
 
 
 if __name__ == '__main__':

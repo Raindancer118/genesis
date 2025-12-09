@@ -14,12 +14,12 @@ $ErrorActionPreference = "Stop"
 # -------------------------------
 $currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Host "🚀 Administrator privileges required. Restarting script as Admin..." -ForegroundColor Yellow
+    Write-Host ">>> Administrator privileges required. Restarting script as Admin..." -ForegroundColor Yellow
     Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
     exit
 }
 
-Write-Host "🚀 Installing/Updating Genesis (Windows)..." -ForegroundColor Cyan
+Write-Host ">>> Installing/Updating Genesis (Windows)..." -ForegroundColor Cyan
 
 # -------------------------------
 # 1) Config
@@ -39,7 +39,7 @@ $RepoUrl = "https://github.com/Raindancer118/genesis.git"
 # -------------------------------
 # 2) Dependencies Check
 # -------------------------------
-Write-Host "🧩 Checking dependencies..." -ForegroundColor Cyan
+Write-Host ">>> Checking dependencies..." -ForegroundColor Cyan
 
 if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
     Write-Host "Git not found. Please install Git for Windows." -ForegroundColor Red
@@ -74,13 +74,13 @@ if (-not (Get-Command "python" -ErrorAction SilentlyContinue)) {
 # 3) Clone / Pull
 # -------------------------------
 if (-not (Test-Path $InstallDir)) {
-    Write-Host "📦 First-time clone to $InstallDir..." -ForegroundColor Cyan
+    Write-Host ">>> First-time clone to $InstallDir..." -ForegroundColor Cyan
     git clone "$RepoUrl" "$InstallDir"
 }
 
 Set-Location "$InstallDir"
 
-Write-Host "🔄 Pulling updates..." -ForegroundColor Cyan
+Write-Host ">>> Pulling updates..." -ForegroundColor Cyan
 git pull
 
 # -------------------------------
@@ -89,7 +89,7 @@ git pull
 $VenvDir = "$InstallDir\.venv"
 $PythonExec = "python"
 
-Write-Host "🧪 Preparing Python virtual environment..." -ForegroundColor Cyan
+Write-Host ">>> Preparing Python virtual environment..." -ForegroundColor Cyan
 
 if (-not (Test-Path $VenvDir)) {
     & $PythonExec -m venv "$VenvDir"
@@ -107,19 +107,19 @@ if (Test-Path $PipExec) {
     
     & $PipExec install $Packages
 } else {
-    Write-Host "⚠️  Virtualenv created but pip not found." -ForegroundColor Yellow
+    Write-Host ">>> Virtualenv created but pip not found." -ForegroundColor Yellow
 }
 
 # -------------------------------
 # 5) Shim / Command Link
 # -------------------------------
-Write-Host "🔗 Creating system-wide command..." -ForegroundColor Cyan
+Write-Host ">>> Creating system-wide command..." -ForegroundColor Cyan
 
 $ShimPath = "C:\Windows\genesis.bat" 
 # Writing to C:\Windows is standard for 'system-wide' binaries in simple scripts if Admin.
 # Content of the shim:
 $ShimContent = "@echo off`r`n`"$VenvDir\Scripts\python.exe`" `"$InstallDir\genesis.py`" %*"
 Set-Content -Path $ShimPath -Value $ShimContent
-# Remove .py potentially if user typed genesis.py before? No need.
+# Remove .py potentially if user typed genesis.py before? No, need.
 
-Write-Host "✅ Genesis installation complete. Type 'genesis' to start." -ForegroundColor Green
+Write-Host ">>> Genesis installation complete. Type 'genesis' to start." -ForegroundColor Green

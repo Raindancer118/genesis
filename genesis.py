@@ -43,6 +43,8 @@ from commands import self_update as self_update_module
 from commands import status as status_module
 from commands import hero as hero_module
 from commands import health as health_module
+from commands import setup as setup_module
+from commands.config import config
 
 
 @click.group()
@@ -56,6 +58,12 @@ def greet():
     """Displays a custom morning greeting."""
     # KORRIGIERT
     greet_module.say_good_morning()
+
+
+@genesis.command()
+def setup():
+    """Opens the interactive configuration wizard."""
+    setup_module.run_setup_wizard()
 
 
 @genesis.command()
@@ -118,7 +126,8 @@ def new(name, template, use_git, yes, structure):
         
         # Determine use_git if not specified
         if use_git is None:
-            use_git = click.confirm("Initialize a Git repository?", default=True)
+            default_git = config.get("project.use_git_init", True)
+            use_git = click.confirm("Initialize a Git repository?", default=default_git)
         
         project.build_from_json(name, structure_data, use_git=use_git)
     else:
@@ -173,7 +182,7 @@ def scan(path):
 @genesis.command()
 @click.argument('packages', nargs=-1, required=True)
 def install(packages):
-    """Finds and installs package(s) using pacman or pamac (AUR)."""
+    """Finds and installs package(s) using pacman, pamac (AUR), winget, or choco."""
     system.install_packages(packages)
 
 
@@ -221,13 +230,19 @@ def health():
 @genesis.command()
 @click.option('--dry-run', is_flag=True, help='Preview targets without killing them.')
 @click.option('--scope', type=click.Choice(['user', 'all']), default='user', help='Process scope: user (default) or all.')
-@click.option('--mem-threshold', type=float, default=400.0, help='Memory threshold in MB (default: 400).')
-@click.option('--cpu-threshold', type=float, default=50.0, help='CPU threshold in percent (default: 50).')
+@click.option('--mem-threshold', type=float, default=None, help='Memory threshold in MB (default: 400).')
+@click.option('--cpu-threshold', type=float, default=None, help='CPU threshold in percent (default: 50).')
 @click.option('--limit', type=int, default=15, help='Maximum number of targets (default: 15).')
 @click.option('--quiet', is_flag=True, help='Suppress verbose output.')
 @click.option('--fast', is_flag=True, help='Skip CPU sampling for faster execution.')
 def hero(dry_run, scope, mem_threshold, cpu_threshold, limit, quiet, fast):
     """Kill resource-intensive processes to free up system resources."""
+    # Resolve defaults from config if not provided
+    if mem_threshold is None:
+        mem_threshold = config.get("hero.mem_threshold_mb", 400.0)
+    if cpu_threshold is None:
+        cpu_threshold = config.get("hero.cpu_threshold", 50.0)
+    
     hero_module.run(
         dry_run=dry_run,
         scope=scope,

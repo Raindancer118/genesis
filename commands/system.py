@@ -11,6 +11,7 @@ import questionary
 from typing import List, Tuple
 from pathlib import Path
 import shlex
+from .config import config
 
 
 PACMAN_AVAILABLE = shutil.which("pacman") is not None
@@ -22,6 +23,8 @@ DPKG_BIN = shutil.which("dpkg")
 APT_AVAILABLE = APT_BIN is not None
 WINGET_BIN = shutil.which("winget")
 WINGET_AVAILABLE = WINGET_BIN is not None
+CHOCO_BIN = shutil.which("choco")
+CHOCO_AVAILABLE = CHOCO_BIN is not None
 
 
 def _apt_command(action, *packages, assume_yes=False):
@@ -98,7 +101,14 @@ def install_packages(packages):
         if to_install_pamac:
             console.print(f"AUR (pamac): [cyan]{', '.join(to_install_pamac)}[/cyan]")
 
-        if questionary.confirm("Proceed with installation?").ask():
+        if to_install_pamac:
+            console.print(f"AUR (pamac): [cyan]{', '.join(to_install_pamac)}[/cyan]")
+
+        if config.get("system.default_install_confirm") and not questionary.confirm("Proceed with installation?").ask():
+             console.print("Installation cancelled.")
+             return
+
+        if True: # Indent block placeholder or just continue
             if to_install_pacman:
                 _run_command(['sudo', 'pacman', '-S', '--needed', *to_install_pacman])
             if to_install_pamac:
@@ -153,7 +163,11 @@ def install_packages(packages):
         console.print("\n--- [bold]Installation Plan[/bold] ---")
         console.print(f"APT packages: [green]{', '.join(to_install)}[/green]")
 
-        if questionary.confirm("Proceed with installation?").ask():
+        if config.get("system.default_install_confirm") and not questionary.confirm("Proceed with installation?").ask():
+            console.print("Installation cancelled.")
+            return
+
+        if True: # Proceed
             cmd = _apt_command('install', *to_install, assume_yes=True)
             _run_command(['sudo', *cmd])
             console.print("\n✅ Installation complete.")
@@ -173,7 +187,11 @@ def install_packages(packages):
         if not to_install:
             return
 
-        if questionary.confirm("Proceed with installation via Winget?").ask():
+        if config.get("system.default_install_confirm") and not questionary.confirm("Proceed with installation via Winget?").ask():
+            console.print("Installation cancelled.")
+            return
+
+        if True:
             for pkg in to_install:
                 console.print(f"Installing {pkg}...")
                 _run_command(['winget', 'install', '-e', '--id', pkg])
@@ -182,7 +200,35 @@ def install_packages(packages):
             console.print("Installation cancelled.")
         return
 
-    console.print("[bold red]No supported package manager found (pacman/pamac, apt, or winget).[/bold red]")
+    if CHOCO_AVAILABLE:
+        to_install = []
+        for package in packages:
+             console.print(f"🔎 Searching for [bold magenta]'{package}'[/bold magenta] via choco...")
+             # 'choco search --exact' is cleaner but might miss partial matches.
+             # We let 'choco install' handle it or do a simple check.
+             # choco search package --local-only (to check if installed)
+             # choco search package (remote)
+             # For now, we assume user wants to try installing it.
+             to_install.append(package)
+
+        if not to_install:
+             return
+
+        if config.get("system.default_install_confirm") and not questionary.confirm("Proceed with installation via Chocolatey?").ask():
+             console.print("Installation cancelled.")
+             return
+
+        if True:
+             for pkg in to_install:
+                 console.print(f"Installing {pkg}...")
+                 # -y for yes to scripts
+                 _run_command(['choco', 'install', pkg, '-y'])
+             console.print("\n✅ Installation complete.")
+        else:
+             console.print("Installation cancelled.")
+        return
+
+    console.print("[bold red]No supported package manager found (pacman/pamac, apt, winget, or choco).[/bold red]")
 
 
 def remove_packages(packages):
@@ -261,7 +307,24 @@ def remove_packages(packages):
              console.print("Removal cancelled.")
         return
 
-    console.print("[bold red]No supported package manager found (pacman/pamac, apt, or winget).[/bold red]")
+    if CHOCO_AVAILABLE:
+        to_remove = []
+        for package in packages:
+             to_remove.append(package)
+
+        if not to_remove:
+            return
+
+        if questionary.confirm("Proceed with removal via Chocolatey?").ask():
+             for pkg in to_remove:
+                 console.print(f"Uninstalling {pkg}...")
+                 _run_command(['choco', 'uninstall', pkg, '-y'])
+             console.print("\n✅ Removal complete.")
+        else:
+             console.print("Removal cancelled.")
+        return
+
+    console.print("[bold red]No supported package manager found (pacman/pamac, apt, winget, or choco).[/bold red]")
 
 
 # --- UPDATED update_system FUNCTION ---
@@ -369,19 +432,28 @@ def update_system(affirmative: bool = False):
     """Performs a full system update tailored to ALL available package managers."""
     console.print("🚀 Starting comprehensive system update...")
 
+    if config.get("system.auto_confirm_update"):
+        affirmative = True
+
     if not affirmative and not questionary.confirm("Proceed with full system update?").ask():
         console.print("Update cancelled.")
         return
 
     # 1. Mirrors
-    _update_mirrors()
+    if config.get("system.update_mirrors"):
+        _update_mirrors()
+    else:
+        console.print("[dim]Skipping mirror update (disabled in config).[/dim]")
 
     # 2. Timeshift
-    try:
-        _manage_timeshift()
-    except KeyboardInterrupt:
-        console.print("[bold red]Aborted.[/bold red]")
-        return
+    if config.get("system.create_timeshift"):
+        try:
+            _manage_timeshift()
+        except KeyboardInterrupt:
+            console.print("[bold red]Aborted.[/bold red]")
+            return
+    else:
+        console.print("[dim]Skipping Timeshift snapshot (disabled in config).[/dim]")
     
     # Wait automatically if affirmative, or we could skip wait?
     # Usually mirror updates happen fast. Timeshift takes time.
@@ -503,6 +575,9 @@ def update_system(affirmative: bool = False):
     # --- Windows (Winget) ---
     if WINGET_AVAILABLE:
         run_update("Windows Software (Winget)", ["winget", "upgrade", "--all"])
+
+    if CHOCO_AVAILABLE:
+        run_update("Windows Software (Chocolatey)", ["choco", "upgrade", "all", "-y"])
 
 
     console.print("\n✅ Full system update process complete.")

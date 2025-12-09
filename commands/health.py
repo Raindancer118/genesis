@@ -1,51 +1,100 @@
 import shutil
 import subprocess
 import os
+import platform
+import sys
 from typing import List, Tuple, Optional
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 from rich.table import Table
 from rich import box
+from rich.layout import Layout
+from rich.align import Align
 
 console = Console()
 
 def _run_command(cmd: List[str], capture: bool = True) -> subprocess.CompletedProcess:
     """Helper to run a system command safely."""
     try:
-        # Use sudo if strictly processing system-level audits that require root?
-        # Many of these checks require root (dmesg - unprivileged might valid, pwck/grpck/pacman -Dk need root or write access/read access to secure files).
-        # We'll try running as is, and let the user handle permissions or checking if sudo is needed.
-        # But specifically `dmesg` might be restricted. `pacman -Dk` usually doesn't need root to *read*?
-        # Actually `dmesg` on modern systemd often restricts access to root/adm.
-        # The user's script checked for UID==0. We should probably warn or try sudo if it fails.
-        
-        # However, calling 'sudo' inside python scripts that might be run by user might be annoying if interactive password prompt messes up UI.
-        # For now we will run them directly. If they fail due to permissions, we report it.
-        # But wait, the bash script specifically checks `if [ "$EUID" -ne 0 ]; then exit 1`.
-        # So it implies this command MUST be run as root.
-        
+        # On Windows, we might need shell=True for some commands if they are built-ins?
+        # But generally subprocess.run works.
         return subprocess.run(cmd, capture_output=capture, text=True)
     except Exception as e:
-        # Return a dummy failed process object
         failed = subprocess.CompletedProcess(args=cmd, returncode=1, stdout="", stderr=str(e))
         return failed
 
-def check_kernel() -> None:
-    """Checks kernel ring buffer for critical errors."""
-    console.print(Panel("<b>[1] Kernel & Hardware Logs</b>", style="cyan", box=box.MINIMAL))
+def _run_powershell(script: str) -> subprocess.CompletedProcess:
+    """Helper to run a PowerShell script block."""
+    try:
+        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", script]
+        return subprocess.run(cmd, capture_output=True, text=True)
+    except Exception as e:
+        return subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=str(e))
+
+def _print_header() -> None:
+    """Prints a beautiful system information header."""
     
-    # Needs root?
+    # Gather Info
+    node = platform.node()
+    system = platform.system()
+    release = platform.release()
+    version = platform.version()
+    machine = platform.machine()
+    processor = platform.processor()
+
+    # Try to get better Distro info on Linux
+    distro_name = "Unknown"
+    if system == "Linux":
+        try:
+            with open("/etc/os-release") as f:
+                for line in f:
+                    if line.startswith("PRETTY_NAME="):
+                        distro_name = line.split("=", 1)[1].strip().strip('"')
+                        break
+        except Exception:
+            distro_name = "Linux Generic"
+    elif system == "Windows":
+        distro_name = f"Windows {release}"
+
+    # Create a Grid/Table for info
+    table = Table(box=box.SIMPLE_HEAD, show_header=False, expand=True)
+    table.add_column("Key", style="cyan bold", justify="right")
+    table.add_column("Value", style="white")
+
+    table.add_row("OS / Distro", distro_name)
+    table.add_row("Kernel Version", release)
+    table.add_row("Architecture", machine)
+    table.add_row("Hostname", node)
+    if processor:
+        table.add_row("Processor", processor)
+    
+    # Header Panel
+    console.print(Panel(
+        table, 
+        title="[bold white]GENESIS SYSTEM HEALTH AUDIT[/bold white]", 
+        subtitle=f"[dim]Checked at {subprocess.run(['date'], capture_output=True, text=True).stdout.strip() if system != 'Windows' else ''}[/dim]",
+        style="blue",
+        box=box.DOUBLE
+    ))
+    console.print()
+
+
+# ==========================================
+# LINUX CHECKS
+# ==========================================
+
+def _check_linux_kernel() -> None:
+    """Checks kernel ring buffer for critical errors (Linux)."""
+    console.print(Panel("<b>[KERNEL] Hardware & System Logs</b>", style="cyan", box=box.MINIMAL))
     cmd = ["dmesg", "--level=crit,alert,emerg"]
-    # Check if we are root? Only if user didn't run genesis with sudo.
-    # We'll try running it. If it fails (permission denied), we might retry with sudo or just warn.
     if os.geteuid() != 0:
          cmd.insert(0, "sudo")
 
     res = _run_command(cmd)
     
     if res.returncode != 0 and "permission" in (res.stderr or "").lower():
-         console.print("[red]✘ Permission denied reading kernel logs. Run with sudo.[/red]")
+         console.print("[red]✘ Permission denied. Run with sudo to see kernel errors.[/red]")
          return
 
     errors = res.stdout.strip()
@@ -55,9 +104,10 @@ def check_kernel() -> None:
         console.print("[red]WARNUNG: Critical Kernel Messages:[/red]")
         console.print(errors)
 
-def check_services() -> None:
-    """Checks for failed systemd services."""
-    console.print("\n" + Panel("<b>[2] Systemd Services</b>", style="cyan", box=box.MINIMAL).render(console))
+def _check_linux_services() -> None:
+    """Checks for failed systemd services (Linux)."""
+    console.print()
+    console.print(Panel("<b>[SERVICES] Systemd Status</b>", style="cyan", box=box.MINIMAL))
     
     if not shutil.which("systemctl"):
         console.print("[yellow]Skipping: systemctl not found.[/yellow]")
@@ -70,148 +120,182 @@ def check_services() -> None:
         console.print("[green]✔ All started services are running cleanly.[/green]")
     else:
         console.print("[red]WARNUNG: The following services have failed:[/red]")
-        # Re-run without no-legend for better output, or just print what we have
-        # Better to show full output
+        # Show cleaner output
         _run_command(["systemctl", "list-units", "--state=failed"], capture=False)
 
-def check_pacman_db() -> None:
-    """Checks Pacman database consistency."""
-    if not shutil.which("pacman"):
-        return
+def _check_linux_packages() -> None:
+    """Checks package integrity (Pacman, Dpkg, Rpm)."""
+    console.print()
+    console.print(Panel("<b>[PACKAGES] Database & File Integrity</b>", style="cyan", box=box.MINIMAL))
 
-    console.print("\n" + Panel("<b>[3] Pacman Database Integrity</b>", style="cyan", box=box.MINIMAL).render(console))
-    
-    # pacman -Dk
-    cmd = ["pacman", "-Dk"]
-    if os.geteuid() != 0: # Pacman db check usually works as user, but better safe? No, actually it often needs write lock even for reading if bad impl?
-        # Actually -Dk check validity.
-        pass
+    # Arch / Manjaro
+    if shutil.which("pacman"):
+        console.print("[bold]Pacman (Arch/Manjaro)[/bold]")
+        # DB Check
+        res = _run_command(["pacman", "-Dk"])
+        if res.returncode == 0:
+            console.print("  [green]✔ Database consistent.[/green]")
+        else:
+             console.print("  [red]✘ Database ERROR (pacman -Dk).[/red]")
         
-    res = _run_command(cmd)
-    if res.returncode == 0:
-        console.print("[green]✔ Package database is consistent.[/green]")
-    else:
-        console.print("[red]✘ ERROR in package database![/red]")
-        console.print("[yellow]Recommendation: Run 'sudo pacman -Dk' manually.[/yellow]")
-
-def check_filesystem() -> None:
-    """Checks filesystem integrity via pacman (missing files)."""
-    if not shutil.which("pacman"):
-        return
-
-    console.print("\n" + Panel("<b>[4] Filesystem Integrity</b>", style="cyan", box=box.MINIMAL).render(console))
-    console.print("[dim]Scanning installed packages... (This may take a moment)[/dim]")
-
-    # pacman -Qk
-    # We pipe stderr to null in bash script "2>/dev/null", here we just ignore stderr?
-    # grep -v " 0 missing files"
-    
-    res = _run_command(["pacman", "-Qk"])
-    
-    # Filter lines
-    lines = res.stdout.splitlines()
-    problems = [line for line in lines if " 0 missing files" not in line and line.strip()]
-    
-    if not problems:
-         console.print("[green]✔ Filesystem is 100% intact. No package files missing.[/green]")
-    else:
-         console.print(f"[red]ATTENTION: Files missing in {len(problems)} packages:[/red]")
-         # Limit output if too many?
-         if len(problems) > 10:
-             for p in problems[:10]:
-                 console.print(f"  {p}")
-             console.print(f"  [dim]... and {len(problems)-10} more.[/dim]")
-         else:
-             for p in problems:
-                 console.print(f"  {p}")
-         
-         console.print("[yellow]-> Often harmless (e.g. empty log folders), but critical for binaries.[/yellow]")
-
-def check_users_groups() -> None:
-    """Checks consistency of /etc/passwd and /etc/group."""
-    console.print("\n" + Panel("<b>[5] User & Group ID Check</b>", style="cyan", box=box.MINIMAL).render(console))
-    
-    # pwck -r (read-only)
-    # usually requires root for full detail but -r might be okay? 
-    # pwck operates on /etc/passwd and /etc/shadow. Shadow is not readable by normal user.
-    # So this likely needs sudo.
-    cmd_sudo = ["sudo"] if os.geteuid() != 0 else []
-    
-    # pwck
-    if shutil.which("pwck"):
-        res_pw = _run_command(cmd_sudo + ["pwck", "-r"])
-        if res_pw.returncode == 0:
-            console.print("[green]✔ User files (/etc/passwd) are clean.[/green]")
+        # Files Check
+        console.print("  [dim]Scanning file integrity (pacman -Qk)...[/dim]")
+        res = _run_command(["pacman", "-Qk"])
+        lines = res.stdout.splitlines()
+        problems = [line for line in lines if " 0 missing files" not in line and line.strip()]
+        if not problems:
+             console.print("  [green]✔ Filesystem 100% intact.[/green]")
         else:
-            console.print("[red]WARNUNG: Inconsistencies found in /etc/passwd (pwck).[/red]")
-            if res_pw.stdout or res_pw.stderr:
-                 console.print(Panel(res_pw.stdout or res_pw.stderr, title="pwck output", expand=False))
-    else:
-        console.print("[dim]Skipping pwck (tool not found).[/dim]")
+             console.print(f"  [red]✘ Missing files in {len(problems)} packages.[/red]")
 
-    # grpck
-    if shutil.which("grpck"):
-        res_gr = _run_command(cmd_sudo + ["grpck", "-r"])
-        if res_gr.returncode == 0:
-            console.print("[green]✔ Group files (/etc/group) are clean.[/green]")
+    # Debian / Ubuntu
+    if shutil.which("dpkg"):
+        console.print("[bold]Dpkg (Debian/Ubuntu)[/bold]")
+        console.print("  [dim]Verifying installed packages (dpkg -V)...[/dim]")
+        # dpkg -V prints nothing if good, or lines like "??5?????? c /etc/..." if changed
+        try:
+             # This can be spammy if configuration files are changed (common)
+             # We might want to filter?
+             res = _run_command(["dpkg", "-V"])
+             if not res.stdout.strip():
+                 console.print("  [green]✔ Integrity check passed.[/green]")
+             else:
+                 count = len(res.stdout.splitlines())
+                 console.print(f"  [yellow]! {count} files have checksum/permission mismatches (often config changes).[/yellow]")
+        except Exception:
+             pass
+
+    # Fedora / RHEL
+    if shutil.which("rpm"):
+        console.print("[bold]RPM (Fedora/RHEL)[/bold]")
+        console.print("  [dim]Verifying installed packages (rpm -Va)...[/dim]")
+        # rpm -Va
+        res = _run_command(["rpm", "-Va"])
+        if not res.stdout.strip():
+             console.print("  [green]✔ Integrity check passed.[/green]")
         else:
-            console.print("[red]WARNUNG: Inconsistencies found in /etc/group (grpck).[/red]")
-            if res_gr.stdout or res_gr.stderr:
-                 console.print(Panel(res_gr.stdout or res_gr.stderr, title="grpck output", expand=False))
-    else:
-        console.print("[dim]Skipping grpck (tool not found).[/dim]")
+             count = len(res.stdout.splitlines())
+             console.print(f"  [yellow]! {count} files differ from database.[/yellow]")
 
-def check_disk_space() -> None:
-    """Checks disk space usage for root."""
-    console.print("\n" + Panel("<b>[6] Disk Space (Root)</b>", style="cyan", box=box.MINIMAL).render(console))
-    
+def _check_linux_disk() -> None:
+    """Checks disk space (Linux)."""
+    console.print()
+    console.print(Panel("<b>[DISK] Storage Usage</b>", style="cyan", box=box.MINIMAL))
+    # Simple df -h /
     res = _run_command(["df", "-h", "/"])
     if res.returncode == 0:
-        lines = res.stdout.splitlines()
-        # Header is line 0, data is line 1
-        if len(lines) >= 2:
-            # Filesystem      Size  Used Avail Use% Mounted on
-            # /dev/sda1       100G   50G   50G  50% /
-            parts = lines[1].split()
-            # typically: parts[0]=FS, [1]=Size, [2]=Used, [3]=Avail, [4]=Use%, [5]=Mount
-            if len(parts) >= 6:
-                used = parts[2]
-                total = parts[1]
-                mount = parts[5]
-                percent = parts[4]
-                
-                # Check if full
-                pct_val = int(percent.strip('%'))
-                color = "green"
-                if pct_val > 80: color = "yellow"
-                if pct_val > 90: color = "red"
-                
-                console.print(f"Used: [{color}]{used}[/{color}] of {total} (Mounted on {mount})")
-                
-                # Draw a simple bar?
-                width = 40
-                filled = int(width * pct_val / 100)
-                bar = f"[{color}]" + "█" * filled + "[dim]" + "░" * (width - filled) + "[/dim][/" + color + "]"
-                console.print(f"{bar} {percent}")
-            else:
-                console.print(lines[1])
-        else:
-            console.print(res.stdout)
+         lines = res.stdout.splitlines()
+         if len(lines) > 1:
+             console.print(lines[0]) # Header
+             console.print(lines[1]) # Root
     else:
-        console.print("[red]Failed to check disk space.[/red]")
+         console.print("[red]Failed to check disk.[/red]")
+
+# ==========================================
+# WINDOWS CHECKS
+# ==========================================
+
+def _check_windows_events() -> None:
+    console.print(Panel("<b>[LOGS] Windows System Events</b>", style="cyan", box=box.MINIMAL))
+    # Get last 5 Critical or Error events from System log
+    script = "Get-EventLog -LogName System -EntryType Error,Warning -Newest 5 | Format-Table -AutoSize"
+    res = _run_powershell(script)
+    if res.returncode == 0 and res.stdout.strip():
+        console.print(res.stdout)
+    else:
+        console.print("[green]✔ No recent critical errors found in System log.[/green]")
+
+def _check_windows_services() -> None:
+    console.print()
+    console.print(Panel("<b>[SERVICES] Failed Services</b>", style="cyan", box=box.MINIMAL))
+    # Check for automatic services that are stopped
+    script = "Get-Service | Where-Object {$_.Status -eq 'Stopped' -and $_.StartType -eq 'Automatic'} | Select-Object Name,DisplayName"
+    res = _run_powershell(script)
+    if res.returncode == 0:
+         if res.stdout.strip():
+             console.print("[red]The following Automatic services are STOPPED:[/red]")
+             console.print(res.stdout)
+         else:
+             console.print("[green]✔ All Automatic services are running.[/green]")
+
+def _check_windows_integrity() -> None:
+    console.print()
+    console.print(Panel("<b>[INTEGRITY] System File Checker</b>", style="cyan", box=box.MINIMAL))
+    console.print("[dim]Note: 'sfc /verifyonly' requires Admin and takes time.[/dim]")
+    # Warn user
+    # If not admin, this fails
+    try:
+        # check admin
+        is_admin = False
+        try:
+             import ctypes
+             is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+        except: pass
+        
+        if not is_admin:
+             console.print("[yellow]⚠ Not running as Administrator. Skipping SFC check.[/yellow]")
+             return
+
+        console.print("[dim]Starting SFC scan...[/dim]")
+        # We might want to stream this or just run it? It's slow.
+        # Maybe skip for 'quick' check?
+        # User asked for health check, so we do it.
+        # But we do verifyonly to avoid changes.
+        res = subprocess.run(["sfc", "/verifyonly"], capture_output=True, text=True)
+        if res.returncode == 0:
+             console.print("[green]✔ No integrity violations found.[/green]")
+        else:
+             console.print("[red]⚠ Integrity issues found or scan failed![/red]")
+             console.print(res.stdout)
+    except Exception as e:
+        console.print(f"[red]Error running SFC: {e}[/red]")
+
+def _check_windows_disk() -> None:
+    console.print()
+    console.print(Panel("<b>[DISK] Drive Status</b>", style="cyan", box=box.MINIMAL))
+    script = "Get-Volume | Where-Object {$_.DriveType -eq 'Fixed'} | Format-Table DriveLetter,FileSystem,SizeRemaining,Size -AutoSize"
+    res = _run_powershell(script)
+    console.print(res.stdout)
+
+
+# ==========================================
+# MAIN
+# ==========================================
 
 def run_health_check() -> None:
-    """Runs the full system health audit."""
-    console.print(Panel("[bold white]MANJARO LINUX SYSTEM INTEGRITY AUDIT[/bold white]", style="blue", box=box.DOUBLE))
+    """Runs the platform-specific health audit."""
+    _print_header()
     
-    if os.geteuid() != 0:
-        console.print("[bold yellow]Note: This tool works best as root (sudo). Some checks might fail or be skipped.[/bold yellow]\n")
+    system = platform.system()
+    
+    if system == "Linux":
+        if os.geteuid() != 0:
+            console.print("[bold yellow]Note: For best results, run as root (sudo).[/bold yellow]\n")
+        _check_linux_kernel()
+        _check_linux_services()
+        _check_linux_packages()
+        _check_linux_disk()
+        
+        # User/group check from before (re-implementing simplified)
+        console.print()
+        console.print(Panel("<b>[USERS] Consistency Check</b>", style="cyan", box=box.MINIMAL))
+        if shutil.which("pwck"):
+            # We suppress output unless error
+            res = subprocess.run(["sudo", "pwck", "-r"] if os.geteuid()!=0 else ["pwck", "-r"], capture_output=True)
+            if res.returncode == 0:
+                 console.print("[green]✔ User DB consistent.[/green]")
+            else:
+                 console.print("[yellow]! /etc/passwd issues found.[/yellow]")
+        else:
+            console.print("[dim]pwck not found.[/dim]")
 
-    check_kernel()
-    check_services()
-    check_pacman_db()
-    check_filesystem()
-    check_users_groups()
-    check_disk_space()
+    elif system == "Windows":
+        _check_windows_events()
+        _check_windows_services()
+        _check_windows_disk()
+        _check_windows_integrity()
+    
+    else:
+        console.print(f"[red]Unsupported Operating System: {system}[/red]")
     
     console.print("\n[bold blue]Audit complete.[/bold blue]")

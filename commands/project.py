@@ -7,6 +7,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 import questionary
+from .config import config
 
 console = Console()
 
@@ -89,7 +90,7 @@ def _create_python_package_scaffold(path, use_git):
                 'description = "A Python package created by Genesis."',
                 'readme = "README.md"',
                 'requires-python = ">=3.8"',
-                'authors = [{ name = "Genesis User", email = "user@example.com" }]',
+                f'authors = [{{ name = "{config.get("project.default_author") or "Genesis User"}", email = "{config.get("project.default_email") or "user@example.com"}" }}]',
                 'dependencies = []',
                 "",
                 "[project.scripts]",
@@ -580,8 +581,8 @@ def _create_ruby_scaffold(path, use_git):
         "Gem::Specification.new do |spec|\n"
         f"  spec.name          = '{path.name}'\n"
         "  spec.version       = '0.1.0'\n"
-        "  spec.authors       = ['Genesis User']\n"
-        "  spec.email         = ['user@example.com']\n"
+        f"  spec.authors       = ['{config.get('project.default_author') or 'Genesis User'}']\n"
+        f"  spec.email         = ['{config.get('project.default_email') or 'user@example.com'}']\n"
         f"  spec.summary       = '{path.name} - A Ruby project'\n"
         "  spec.files         = Dir['lib/**/*.rb']\n"
         "  spec.require_paths = ['lib']\n"

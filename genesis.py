@@ -42,6 +42,7 @@ from commands import system
 from commands import self_update as self_update_module
 from commands import status as status_module
 from commands import hero as hero_module
+from commands import health as health_module
 
 
 @click.group()
@@ -209,6 +210,12 @@ def monitor():
     """Background monitor task for the systemd service."""
     # KORRIGIERT
     status_module.run_background_check()
+
+
+@genesis.command()
+def health():
+    """Performs a deep system integrity and quality audit."""
+    health_module.run_health_check()
 
 
 @genesis.command()

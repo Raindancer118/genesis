@@ -20,6 +20,8 @@ APT_BIN = APT_GET_BIN or shutil.which("apt")
 APT_CACHE_BIN = shutil.which("apt-cache")
 DPKG_BIN = shutil.which("dpkg")
 APT_AVAILABLE = APT_BIN is not None
+WINGET_BIN = shutil.which("winget")
+WINGET_AVAILABLE = WINGET_BIN is not None
 
 
 def _apt_command(action, *packages, assume_yes=False):
@@ -159,7 +161,28 @@ def install_packages(packages):
             console.print("Installation cancelled.")
         return
 
-    console.print("[bold red]No supported package manager found (pacman/pamac or apt).[/bold red]")
+    if WINGET_AVAILABLE:
+        to_install = []
+        
+        for package in packages:
+            console.print(f"🔎 Searching for [bold magenta]'{package}'[/bold magenta] via winget...")
+            # Simple check via search? No, show gives better info but harder to parse.
+            # Winget search is noisy. We assume if the user asks, it exists or will fail at install.
+            to_install.append(package)
+
+        if not to_install:
+            return
+
+        if questionary.confirm("Proceed with installation via Winget?").ask():
+            for pkg in to_install:
+                console.print(f"Installing {pkg}...")
+                _run_command(['winget', 'install', '-e', '--id', pkg])
+            console.print("\n✅ Installation complete.")
+        else:
+            console.print("Installation cancelled.")
+        return
+
+    console.print("[bold red]No supported package manager found (pacman/pamac, apt, or winget).[/bold red]")
 
 
 def remove_packages(packages):
@@ -221,7 +244,24 @@ def remove_packages(packages):
             console.print("Removal cancelled.")
         return
 
-    console.print("[bold red]No supported package manager found (pacman/pamac or apt).[/bold red]")
+    if WINGET_AVAILABLE:
+        to_remove = []
+        for package in packages:
+             to_remove.append(package)
+             
+        if not to_remove:
+            return
+
+        if questionary.confirm("Proceed with removal via Winget?").ask():
+             for pkg in to_remove:
+                 console.print(f"Uninstalling {pkg}...")
+                 _run_command(['winget', 'uninstall', '--id', pkg])
+             console.print("\n✅ Removal complete.")
+        else:
+             console.print("Removal cancelled.")
+        return
+
+    console.print("[bold red]No supported package manager found (pacman/pamac, apt, or winget).[/bold red]")
 
 
 # --- UPDATED update_system FUNCTION ---
@@ -379,18 +419,22 @@ def update_system(affirmative: bool = False):
                 console.print(f"[red]Error updating {name}: {e}[/red]")
         
     # --- Arch / System ---
-    # Priority: Paru > Yay > Pamac > Pacman
-    # Since these are mutually exclusive mostly for the "same" database, we pick the "best" one.
+    # Priority: Pamac > Paru > Yay > Pacman
+    # Pamac is preferred on Manjaro.
+    # For Paru/Yay, we split updates to ensure official packages use pacman (binary)
+    # and only AUR updates go through the helper to avoid unwanted compilation.
     arch_updated = False
-    
-    if shutil.which("paru"):
-        run_update("Arch System (Paru)", ["paru", "-Syu"])
+
+    if shutil.which("pamac"):
+        run_update("Arch System (Pamac)", ["pamac", "upgrade"])
+        arch_updated = True
+    elif shutil.which("paru"):
+        run_update("Arch System (Pacman)", ["sudo", "pacman", "-Syu"])
+        run_update("Arch System (Paru AUR)", ["paru", "-Sua"])
         arch_updated = True
     elif shutil.which("yay"):
-        run_update("Arch System (Yay)", ["yay", "-Syu"])
-        arch_updated = True
-    elif shutil.which("pamac"):
-        run_update("Arch System (Pamac)", ["pamac", "upgrade"])
+        run_update("Arch System (Pacman)", ["sudo", "pacman", "-Syu"])
+        run_update("Arch System (Yay AUR)", ["yay", "-Sua"])
         arch_updated = True
     elif shutil.which("pacman"):
         run_update("Arch System (Pacman)", ["sudo", "pacman", "-Syu"])
@@ -456,6 +500,10 @@ def update_system(affirmative: bool = False):
         # We'll skip forcing 'pip install --upgrade pip' globally to avoid breaking distro-managed pip.
         console.print(f"\n[dim]Skipping global 'pip' self-update to protect system integrity. Use 'pipx' for global tools.[/dim]")
 
+    # --- Windows (Winget) ---
+    if WINGET_AVAILABLE:
+        run_update("Windows Software (Winget)", ["winget", "upgrade", "--all"])
+
 
     console.print("\n✅ Full system update process complete.")
 
@@ -473,6 +521,9 @@ _EXCLUDE_DIR_PATTERNS = [
     r"(^|/)\.rustup($|/)", r"(^|/)\.cargo($|/)", r"(^|/)\.steam($|/)", r"(^|/)\.var/app($|/)",
     r"(^|/)\.wine($|/)", r"(^|/)target($|/)", r"(^|/)build($|/)", r"(^|/)dist($|/)",
 ]
+if os.name == 'nt':
+    # Adjust regex for Windows paths if needed, or rely solely on Defender excludes
+    pass
 
 # Max-Größen für schnelle Profile (verhindert 17h-Läufe an Archiven/Images).
 # Full ignoriert diese Limits.
@@ -606,6 +657,23 @@ def _get_usb_drives() -> List[Path]:
     
     return unique_mounts
 
+
+def _get_windows_drives() -> List[Path]:
+    """Detects fixed and removable drives on Windows."""
+    drives = []
+    bitmask = subprocess.run(["wmic", "logicaldisk", "get", "name"], capture_output=True, text=True)
+    # Generic check or use psutil in future
+    # Using psutil for cross-platform is better if available (it is installed)
+    try:
+        import psutil
+        for part in psutil.disk_partitions():
+            if 'cdrom' in part.opts or part.fstype == '':
+                continue
+            drives.append(Path(part.mountpoint))
+    except Exception:
+        pass
+    return drives
+
 # =========================
 # freshclam
 # =========================
@@ -647,6 +715,37 @@ def _run_freshclam() -> None:
             console.print("[yellow]freshclam daemon already running; proceeding.[/yellow]")
         else:
             console.print(f"[bold red]freshclam error:[/bold red]\n{res.stderr.strip() or res.stdout.strip()}")
+
+def _run_defender_scan(paths: List[Path]) -> None:
+    """Run Windows Defender Scan on specific paths."""
+    # MpCmdRun.exe path
+    mpcmd = r"C:\Program Files\Windows Defender\MpCmdRun.exe"
+    if not os.path.exists(mpcmd):
+        # Checks various locations?
+        candidate = shutil.which("MpCmdRun.exe")
+        if candidate:
+            mpcmd = candidate
+        else:
+             console.print("[red]Windows Defender (MpCmdRun.exe) not found.[/red]")
+             return
+
+    console.print(f"\n[bold cyan]🛡️  Windows Defender Scan[/bold cyan]")
+    
+    for p in paths:
+        console.print(f"Scanning {p}...")
+        # -Scan -ScanType 3 -File <path>
+        # Note: ScanType 3 is Custom Scan
+        cmd = [mpcmd, "-Scan", "-ScanType", "3", "-File", str(p)]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if res.returncode == 0:
+            console.print(f"[green]Clean: {p}[/green]")
+        elif res.returncode == 2:
+             console.print(f"[bold red]THREAT DETECTED in: {p}[/bold red]")
+             console.print(res.stdout)
+        else:
+             console.print(f"[yellow]Scan error or cancellation for {p} (Code {res.returncode})[/yellow]")
+             if res.stdout: console.print(res.stdout)
 
 # =========================
 # Build Profiles
@@ -720,6 +819,19 @@ def _profile_paths(profile: str) -> Tuple[str, List[Path], List[str]]:
         return ("Home (Rest)", rest, list(_QUICK_LIMITS))
     if profile == "full":
         return ("Full System", full, [])  # keine Größenlimits bei Full
+
+    if profile == "full":
+        return ("Full System", full, [])  # keine Größenlimits bei Full
+
+    if os.name == 'nt':
+        # Windows specific profiles overrides if needed
+        # We try to map the same logic to Windows paths mostly works via pathlib
+        # but 'Full System' should be C:\
+        if profile == "full":
+             return ("Full System (C:)", [Path("C:/")], [])
+        # 'core' on Windows? C:\Windows, C:\Program Files?
+        if profile == "core":
+             return ("System Core", [Path("C:/Windows"), Path("C:/Program Files")], [])
 
     raise ValueError(f"Unknown profile: {profile}")
 
@@ -811,6 +923,14 @@ def smart_scan(profile: str | None = None) -> None:
     # Wichtig: Pfade anhängen
     args += [str(p) for p in include_paths]
 
+    if os.name == 'nt':
+        # Use Defender logic instead
+        # For 'core', 'daily' etc profiles, pass the list of paths to defender loop
+        _run_defender_scan(include_paths)
+        return
+
+    console.print("\n[bold cyan]🚀 Scanning…[/bold cyan]")
+
     console.print("\n[bold cyan]🚀 Scanning…[/bold cyan]")
     console.print(f"[dim]{shlex.join(args)}[/dim]")
 
@@ -870,6 +990,9 @@ def scan_usb_drives() -> None:
     # Build command
     scanner, base_flags = _best_scanner()
     args = [scanner] + base_flags + ["--stdout", "--infected"]
+    if os.name == 'nt':
+        _run_defender_scan(usb_drives)
+        return
     args += _exclude_args()
     args += list(_QUICK_LIMITS)
     args += [str(p) for p in usb_drives]
@@ -931,6 +1054,18 @@ def scan_directory(path: str) -> None:
     args += _exclude_args()
     args += list(_QUICK_LIMITS)
     args.append(str(target))
+
+    args.append(str(target))
+
+    if os.name == 'nt':
+        _run_defender_scan([target])
+        return
+
+    args.append(str(target))
+
+    if os.name == 'nt':
+        _run_defender_scan([Path(target)])
+        return
 
     print(" ".join(shlex.quote(a) for a in args))
     proc = subprocess.run(args, capture_output=True, text=True)

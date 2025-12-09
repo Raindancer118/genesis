@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import psutil
+import platform
 from rich.console import Console
 from rich.spinner import Spinner
 from rich.markdown import Markdown
@@ -36,6 +37,16 @@ def get_system_metrics():
     elif 'k10temp' in temps and temps['k10temp']:
         cpu_temp = temps['k10temp'][0].current
     metrics['CPU Temp (°C)'] = cpu_temp
+    
+    # Windows CPU Temp Support (often requires heavy WMI or skipped)
+    if platform.system() == "Windows":
+        try:
+             # Typical WMI call via wmic or skipped as 'N/A' often default
+             # psutil often fails on Windows for temps without specific drivers
+             # We leave it as N/A or try:
+             pass
+        except:
+             pass
     # --- ENDE DER KORREKTUR ---
 
     metrics['Memory Usage (%)'] = psutil.virtual_memory().percent
@@ -79,6 +90,18 @@ def get_system_metrics():
             )
         except (subprocess.CalledProcessError, FileNotFoundError):
             pending_updates = 0
+
+    if platform.system() == "Windows":
+        try:
+            # Check winget upgrades
+            # winget upgrade --include-unknown -> lists
+            out = subprocess.check_output(["winget", "upgrade"], text=True, stderr=subprocess.DEVNULL)
+            lines = [l for l in out.splitlines() if l.strip()]
+            # Approximate: Table header usually takes 2 lines
+            pending_updates = max(0, len(lines) - 2)
+        except:
+            pending_updates = 0
+
     metrics['Pending Updates'] = pending_updates
 
     try:
@@ -86,6 +109,9 @@ def get_system_metrics():
         metrics['Failed systemd Services'] = failed_services if failed_services else "None"
     except subprocess.CalledProcessError:
         metrics['Failed systemd Services'] = "N/A"
+        
+    if platform.system() == "Windows":
+        metrics['Failed systemd Services'] = "N/A (Windows)"
 
     metrics['Genesis Greet Service'] = "Active" if os.path.exists(
         f"{os.path.expanduser('~')}/.config/systemd/user/genesis-greet.service") else "Not Installed"

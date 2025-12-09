@@ -24,6 +24,10 @@ SAFE_PROC_NAMES: Set[str] = {
     "zsh", "bash", "fish", "sh", "python", "python3", "perl", "ruby",
     "kded5", "ksmserver", "kdeinit5", "kdeinit6", "kglobalaccel5", "kglobalaccel",
     "genesis",
+    # Windows Critical
+    "explorer.exe", "taskmgr.exe", "csrss.exe", "lsass.exe", 
+    "winlogon.exe", "dwm.exe", "svchost.exe", "services.exe",
+    "wininit.exe", "smss.exe", "spoolsv.exe", "Registry", "System",
 }
 
 # PIDs that should never be killed (init and self)

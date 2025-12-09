@@ -258,13 +258,21 @@ def _manage_timeshift():
 
     # 1. Create Snapshot
     console.print("Creating new snapshot...")
+    # Text file busy fix: Temporarily disable swap to avoid BTRFS snapshot errors
+    console.print("[dim]Temporarily disabling swap...[/dim]")
+    _run_command(['sudo', 'swapoff', '-a'])
+
     try:
-        _run_command(['sudo', 'timeshift', '--create', '--comments', 'Genesis Update'])
-    except Exception:
-        console.print("[red]Failed to create snapshot.[/red]")
-        # We continue even if creation fails? Maybe better to warn.
-        if not questionary.confirm("Snapshot creation failed. Continue with update?", default=False).ask():
-            raise KeyboardInterrupt("Update cancelled by user.")
+        try:
+            _run_command(['sudo', 'timeshift', '--create', '--comments', 'Genesis Update'])
+        except Exception:
+            console.print("[red]Failed to create snapshot.[/red]")
+            # We continue even if creation fails? Maybe better to warn.
+            if not questionary.confirm("Snapshot creation failed. Continue with update?", default=False).ask():
+                raise KeyboardInterrupt("Update cancelled by user.")
+    finally:
+        console.print("[dim]Re-enabling swap...[/dim]")
+        _run_command(['sudo', 'swapon', '-a'])
 
     # 2. Delete Oldest (Pruning)
     # We need to parse 'timeshift --list'

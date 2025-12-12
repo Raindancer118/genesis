@@ -199,9 +199,9 @@ pub fn info() {
     sys.refresh_all();
 
     println!("{}", "System Information".bold().green());
-    println!("{}: {}", "OS".bold(), sys.name().unwrap_or("Unknown".into()));
-    println!("{}: {}", "Kernel".bold(), sys.kernel_version().unwrap_or("Unknown".into()));
-    println!("{}: {}", "Host Name".bold(), sys.host_name().unwrap_or("Unknown".into()));
+    println!("{}: {}", "OS".bold(), System::name().unwrap_or("Unknown".into()));
+    println!("{}: {}", "Kernel".bold(), System::kernel_version().unwrap_or("Unknown".into()));
+    println!("{}: {}", "Host Name".bold(), System::host_name().unwrap_or("Unknown".into()));
     println!("{}: {} cores", "CPU".bold(), sys.cpus().len());
     println!("{}: {} MB / {} MB", 
         "Memory".bold(), 
@@ -210,7 +210,8 @@ pub fn info() {
     );
 
     println!("\n{}", "Disks".bold());
-    for disk in sys.disks() {
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    for disk in &disks {
          println!("{}: {} / {} ({} free)", 
             disk.name().to_string_lossy(),
             format_bytes(disk.total_space() - disk.available_space()),

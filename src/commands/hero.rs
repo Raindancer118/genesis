@@ -35,8 +35,7 @@ pub fn run(
 
     for (pid, process) in sys.processes() {
         if scope == "user" {
-             // Filter by user. simple check: process.uid == current_user_uid
-             // sysinfo Uid handling varies by OS.
+             // Filter by user. simple check: process.user_id() == current_user_uid
              if let Some(uid) = process.user_id() {
                  if let Some(current) = &current_user_uid {
                       if uid != current { continue; }

@@ -13,9 +13,9 @@ pub fn run() -> Result<()> {
 
     // 1. Basic Info
     println!("\n{}", "--- System Info ---".yellow());
-    println!("{}: {}", "OS".bold(), sys.name().unwrap_or("Unknown".to_string()));
-    println!("{}: {}", "Kernel".bold(), sys.kernel_version().unwrap_or("Unknown".to_string()));
-    println!("{}: {}", "Hostname".bold(), sys.host_name().unwrap_or("Unknown".to_string()));
+    println!("{}: {}", "OS".bold(), System::name().unwrap_or("Unknown".to_string()));
+    println!("{}: {}", "Kernel".bold(), System::kernel_version().unwrap_or("Unknown".to_string()));
+    println!("{}: {}", "Hostname".bold(), System::host_name().unwrap_or("Unknown".to_string()));
     
     // Uptime
     let uptime = System::uptime();
@@ -42,7 +42,8 @@ pub fn run() -> Result<()> {
 
     // Disks
     println!("\n{}", "--- Storage ---".yellow());
-    for disk in sys.disks() {
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    for disk in &disks {
         let total = disk.total_space();
         let available = disk.available_space();
         let used = total - available;

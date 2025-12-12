@@ -281,6 +281,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dirs"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44c45a9d03d6676652bcb5e724c7e988de1acad23a711b5217ab9cbecbec2225"
+dependencies = [
+ "dirs-sys",
+]
+
+[[package]]
 name = "dirs-sys"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -341,6 +350,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastrand"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -383,6 +398,7 @@ dependencies = [
  "colored",
  "comfy-table",
  "directories",
+ "dirs",
  "git2",
  "inquire",
  "serde",
@@ -604,6 +620,7 @@ dependencies = [
  "fxhash",
  "newline-converter",
  "once_cell",
+ "tempfile",
  "unicode-segmentation",
  "unicode-width 0.1.14",
 ]
@@ -1154,6 +1171,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tempfile"
+version = "3.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d31c77bdf42a745371d260a26ca7163f1e0924b64afa0b688e61b5a9fa02f16"
+dependencies = [
+ "fastrand",
+ "getrandom 0.3.4",
+ "once_cell",
+ "rustix 1.1.2",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1403,14 +1433,14 @@ dependencies = [
 
 [[package]]
 name = "which"
-version = "4.4.2"
+version = "6.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87ba24419a2078cd2b0f2ede2691b6c66d8e47836da3b6db8265ebad47afbfc7"
+checksum = "b4ee928febd44d98f2f459a4a79bd4d928591333a494a10a868418ac1b39cf1f"
 dependencies = [
  "either",
  "home",
- "once_cell",
  "rustix 0.38.44",
+ "winsafe",
 ]
 
 [[package]]
@@ -1797,6 +1827,12 @@ checksum = "5a5364e9d77fcdeeaa6062ced926ee3381faa2ee02d3eb83a5c27a8825540829"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "winsafe"
+version = "0.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
 
 [[package]]
 name = "wit-bindgen"

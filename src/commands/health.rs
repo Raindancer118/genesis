@@ -1,6 +1,6 @@
 use anyhow::Result;
 use colored::Colorize;
-use sysinfo::{System, SystemExt, DiskExt, ProcessorExt};
+use sysinfo::System;
 use std::process::Command;
 use which::which;
 

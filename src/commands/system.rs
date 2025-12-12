@@ -1,9 +1,9 @@
 use crate::config::ConfigManager;
-use anyhow::{Result, Context, anyhow};
+use anyhow::{Result, anyhow};
 use colored::Colorize;
 use inquire::Confirm;
 use std::process::Command;
-use sysinfo::{System, SystemExt, ProcessorExt, DiskExt}; 
+use sysinfo::System;
 use which::which;
 
 pub fn install(packages: Vec<String>, config: &ConfigManager) -> Result<()> {
@@ -196,7 +196,7 @@ pub fn update(yes: bool, _config: &ConfigManager) -> Result<()> {
 
 pub fn info() {
     let mut sys = System::new_all();
-    sys.refresh_all();
+    sys.refresh_all(); 
 
     println!("{}", "System Information".bold().green());
     println!("{}: {}", "OS".bold(), System::name().unwrap_or("Unknown".into()));

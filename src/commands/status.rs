@@ -1,8 +1,7 @@
 use anyhow::Result;
 use colored::Colorize;
 use git2::{Repository, StatusOptions};
-use sysinfo::{System, SystemExt};
-use std::env;
+use sysinfo::System;
 
 pub fn run() -> Result<()> {
     println!("{}", "📊 Status Check".bold().blue());
@@ -44,7 +43,7 @@ pub fn run() -> Result<()> {
 
     // 2. System Load
     let mut sys = System::new_all();
-    sys.refresh_cpu();
+    sys.refresh_cpu_all();
     let load = System::load_average();
     println!("\nSystem Load: {:.2}, {:.2}, {:.2}", load.one, load.five, load.fifteen);
     

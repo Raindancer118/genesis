@@ -1,13 +1,14 @@
-use sysinfo::{Pid, ProcessExt, System, SystemExt};
+// use sysinfo::{System, SystemExt}; -- Removed
+use sysinfo::System;
+use inquire::MultiSelect;
 use colored::Colorize;
-use inquire::{Confirm, MultiSelect};
 use std::collections::HashMap;
 
 pub fn run(
     dry_run: bool,
     scope: String,
-    mem_threshold_mb: Option<f64>,
-    cpu_threshold: Option<f64>,
+    mem_threshold: u64,
+    cpu_threshold: f32,
     limit: usize,
     quiet: bool,
     fast: bool,
@@ -26,8 +27,8 @@ pub fn run(
         sys.refresh_all();
     }
 
-    let mem_limit = mem_threshold_mb.unwrap_or(400.0) * 1024.0 * 1024.0; // MB to Bytes
-    let cpu_limit = cpu_threshold.unwrap_or(50.0);
+    let mem_limit_mb = mem_threshold; 
+    let cpu_limit = cpu_threshold;
 
     let current_user_uid = get_current_user_uid();
 
@@ -35,7 +36,7 @@ pub fn run(
 
     for (pid, process) in sys.processes() {
         if scope == "user" {
-             // Filter by user. simple check: process.user_id() == current_user_uid
+             // Filter by user. simple check
              if let Some(uid) = process.user_id() {
                  if let Some(current) = &current_user_uid {
                       if uid != current { continue; }
@@ -43,11 +44,13 @@ pub fn run(
              }
         }
 
-        let mem = process.memory() as f64;
-        let cpu = process.cpu_usage() as f64;
+        let mem = process.memory() / 1024 / 1024; // MB
+        let cpu = process.cpu_usage();
 
-        if mem > mem_limit || cpu > cpu_limit {
-            targets.push((pid, process.name().to_string(), mem, cpu));
+        if (mem > mem_threshold) || (cpu > cpu_threshold) {
+            // Fix: process.name() returns &OsStr in some versions, need string conversion
+            let name = process.name().to_string_lossy();
+            targets.push((*pid, name.into_owned(), mem, cpu));
         }
     }
 
@@ -94,7 +97,7 @@ pub fn run(
             for item in selection {
                 if let Some(pid) = kill_map.get(&item) {
                      if let Some(proc) = sys.process(*pid) {
-                         println!("Killing {} ({})", proc.name(), pid);
+                         println!("Killing {} ({})", proc.name().to_string_lossy(), pid);
                          if proc.kill() {
                              println!("{}", "Eliminated.".green());
                          } else {

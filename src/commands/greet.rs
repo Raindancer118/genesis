@@ -1,5 +1,6 @@
 use colored::Colorize;
-use chrono::Local;
+use anyhow::Result;
+use chrono::{Local, Timelike};
 
 pub fn run() {
     let now = Local::now();

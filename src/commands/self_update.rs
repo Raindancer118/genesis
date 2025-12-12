@@ -41,6 +41,36 @@ pub fn run() -> Result<()> {
         return Err(anyhow!("Git pull failed."));
     }
 
+    // 2.5 Show Changelog
+    let changelog_path = project_root.join("CHANGELOG.md");
+    if changelog_path.exists() {
+        println!("\n{}", "While you wait: This is new to genesis:".bold().magenta());
+        // Simple parser: Extract the first section under valid headers
+        if let Ok(content) = std::fs::read_to_string(changelog_path) {
+            let mut lines = content.lines();
+            let mut printing = false;
+            let mut count = 0;
+            
+            for line in lines {
+                if line.starts_with("## [") {
+                    if printing { break; } // Stop at next header
+                    printing = true;
+                    println!("{}", line.bold());
+                    continue;
+                }
+                if printing {
+                    println!("{}", line);
+                    count += 1;
+                    if count > 20 { 
+                        println!("... (see CHANGELOG.md for more)"); 
+                        break; 
+                    }
+                }
+            }
+            println!(); 
+        }
+    }
+
     // 3. Rebuild
     println!("🔨 Rebuilding...");
     let cargo = if env::var("CARGO").is_ok() {

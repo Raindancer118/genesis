@@ -1,0 +1,9 @@
+[Unit]
+Description=Genesis startup greeting
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/genesis greet
+
+[Install]
+WantedBy=default.target

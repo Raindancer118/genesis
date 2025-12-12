@@ -194,6 +194,106 @@ pub fn update(yes: bool, _config: &ConfigManager) -> Result<()> {
     Ok(())
 }
 
+pub fn search(query: String, _config: &ConfigManager) -> Result<()> {
+    println!("{}", format!("🔍 Searching for '{}' across all managers...", query).bold().magenta());
+    
+    let mut found_any = false;
+
+    // --- Arch (Pacman/Pamac) ---
+    if which("pacman").is_ok() {
+        println!("{}", "--- Pacman ---".bold().blue());
+        let status = Command::new("pacman").args(["-Ss", &query]).status()?;
+        if status.success() { found_any = true; }
+        
+        if which("pamac").is_ok() {
+             println!("{}", "--- AUR (Pamac) ---".bold().blue());
+             let status = Command::new("pamac").args(["search", &query]).status()?;
+             if status.success() { found_any = true; }
+        }
+    }
+
+    // --- Debian (Apt) ---
+    if which("apt").is_ok() {
+        println!("{}", "--- Apt ---".bold().yellow());
+        let status = Command::new("apt").args(["search", &query]).status()?;
+        if status.success() { found_any = true; }
+    }
+
+    // --- Windows (Choco/Winget) ---
+    if cfg!(windows) || which("choco").is_ok() {
+        if which("choco").is_ok() {
+            println!("{}", "--- Chocolatey ---".bold().cyan());
+            let status = Command::new("choco").args(["search", &query]).status()?;
+            if status.success() { found_any = true; }
+        }
+    }
+    
+    if cfg!(windows) || which("winget").is_ok() {
+        if which("winget").is_ok() {
+            println!("{}", "--- Winget ---".bold().cyan());
+            let status = Command::new("winget").args(["search", &query]).status()?;
+            if status.success() { found_any = true; }
+        }
+    }
+
+    if !found_any {
+        println!("No results found.");
+    }
+
+    Ok(())
+}
+
+pub fn remove(packages: Vec<String>, config: &ConfigManager) -> Result<()> {
+    if packages.is_empty() { return Ok(()); }
+    
+    println!("{}", format!("🗑️  Removing packages: {:?}", packages).bold().red());
+
+    // Strategy: Try to remove from known managers.
+    // Ideally check if installed first.
+    
+    if which("pacman").is_ok() {
+         // Pacman removal
+         // We can just try removal. Pacman errors if not found.
+         if config.config.system.default_install_confirm {
+             if !Confirm::new("Attempt removal via Pacman?").with_default(true).prompt()? {
+                 println!("Skipped Pacman.");
+             } else {
+                 Command::new("sudo").arg("pacman").arg("-Rns").args(&packages).status()?;
+             }
+         } else {
+             Command::new("sudo").arg("pacman").arg("-Rns").args(&packages).status()?;
+         }
+    }
+
+    if which("apt").is_ok() {
+         if config.config.system.default_install_confirm {
+             if !Confirm::new("Attempt removal via Apt?").with_default(true).prompt()? {
+                 println!("Skipped Apt.");
+             } else {
+                 Command::new("sudo").arg("apt").arg("remove").arg("-y").args(&packages).status()?;
+             }
+         } else {
+             Command::new("sudo").arg("apt").arg("remove").arg("-y").args(&packages).status()?;
+         }
+    }
+
+    if which("choco").is_ok() {
+        for pkg in &packages {
+             println!("Removing {} via Chocolatey...", pkg);
+             Command::new("choco").arg("uninstall").arg(pkg).arg("-y").status()?;
+        }
+    }
+
+    if which("winget").is_ok() {
+        for pkg in &packages {
+             println!("Removing {} via Winget...", pkg);
+             Command::new("winget").arg("uninstall").arg("--id").arg(pkg).status()?;
+        }
+    }
+
+    Ok(())
+}
+
 pub fn info() {
     let mut sys = System::new_all();
     sys.refresh_all(); 

@@ -162,17 +162,16 @@ async fn run_rust(config_manager: &mut config::ConfigManager) -> Result<()> {
              // My run_build prompts if None.
         }
         Commands::Scan { path } => {
-             println!("Scan command not implemented yet.");
+             commands::scan::run(path.clone())?;
         }
         Commands::Search { query } => {
-             println!("Search command not implemented yet.");
+             commands::system::search(query, config_manager)?;
         }
         Commands::Install { packages } => {
              commands::system::install(packages, config_manager)?;
         }
         Commands::Remove { packages } => {
-             // commands::system::remove(packages, config_manager)?;
-             println!("Remove command not implemented yet.");
+             commands::system::remove(packages, config_manager)?;
         }
         Commands::Update { yes } => {
              commands::system::update(yes, config_manager)?;
@@ -184,7 +183,7 @@ async fn run_rust(config_manager: &mut config::ConfigManager) -> Result<()> {
              commands::system::info();
         }
         Commands::Monitor => {
-             println!("Monitor command not implemented yet.");
+             commands::monitor::run()?;
         }
         Commands::Health => {
              commands::health::run()?;

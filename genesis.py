@@ -45,6 +45,9 @@ from commands import hero as hero_module
 from commands import health as health_module
 from commands import setup as setup_module
 from commands.config import config
+from commands.pkg_managers.controller import PackageManagerController
+from rich.console import Console
+from rich.table import Table
 
 
 @click.group()
@@ -180,10 +183,59 @@ def scan(path):
 
 
 @genesis.command()
+@click.argument('query')
+def search(query):
+    """Searches for packages across all installed package managers."""
+    console = Console()
+    with console.status(f"[bold green]Searching for '{query}'...[/bold green]"):
+        controller = PackageManagerController()
+        results = controller.search(query)
+        controller.save_results(results)
+
+    if not results:
+        console.print(f"[yellow]No results found for '{query}'.[/yellow]")
+        return
+
+    table = Table(title=f"Search Results for '{query}'")
+    table.add_column("ID", style="cyan", no_wrap=True)
+    table.add_column("Source", style="magenta")
+    table.add_column("Name", style="green")
+    table.add_column("Version", style="yellow")
+    table.add_column("State", style="blue")
+
+    for i, res in enumerate(results, start=1):
+        state = "Installed" if res.installed else ""
+        table.add_row(f"id{i}", res.manager_name, res.name, res.version, state)
+
+    console.print(table)
+    console.print("[dim]Use 'genesis install id<N>' to install a specific package.[/dim]")
+
+
+@genesis.command()
 @click.argument('packages', nargs=-1, required=True)
 def install(packages):
-    """Finds and installs package(s) using pacman, pamac (AUR), winget, or choco."""
-    system.install_packages(packages)
+    """Finds and installs package(s) using pacman, pamac (AUR), winget, or choco.
+    
+    You can also use 'id<N>' to install a result from the last 'genesis search'.
+    """
+    # Check for ID format
+    # If ANY package arg is an ID, we try to install by ID via controller.
+    # Mixing IDs and names is tricky, but let's handle IDs specifically.
+    
+    # Separate IDs from regular names
+    ids = [p for p in packages if p.lower().startswith('id') and p[2:].isdigit()]
+    names = [p for p in packages if not (p.lower().startswith('id') and p[2:].isdigit())]
+    
+    if ids:
+        controller = PackageManagerController()
+        for pkg_id in ids:
+            if not controller.install_by_id(pkg_id):
+                 # If install failed or ID invalid, maybe user meant literal package named 'id4'?
+                 # Highly unlikely but possible.
+                 pass
+    
+    if names:
+        system.install_packages(names)
 
 
 @genesis.command()

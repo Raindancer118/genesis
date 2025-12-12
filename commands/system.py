@@ -60,6 +60,37 @@ def _run_command(command, stream_output=True):
         return None
 
 
+
+def _install_chocolatey():
+    """Installs Chocolatey on Windows."""
+    console.print("[bold cyan]🍫 Installing Chocolatey...[/bold cyan]")
+    try:
+        # PowerShell command to install Chocolatey
+        ps_command = (
+            "Set-ExecutionPolicy Bypass -Scope Process -Force; "
+            "[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; "
+            "iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))"
+        )
+        
+        # Run command via PowerShell
+        proc = subprocess.run(["powershell", "-NoProfile", "-InputFormat", "None", "-ExecutionPolicy", "Bypass", "-Command", ps_command], check=False)
+        
+        if proc.returncode == 0:
+             console.print("[green]Chocolatey installed successfully.[/green]")
+             # Attempt to add to PATH for current session
+             # Default path is C:\ProgramData\chocolatey\bin
+             choco_bin = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), r"chocolatey\bin")
+             if os.path.exists(choco_bin) and choco_bin not in os.environ["PATH"]:
+                 os.environ["PATH"] += os.pathsep + choco_bin
+             return True
+        else:
+             console.print("[red]Chocolatey installation failed.[/red]")
+             return False
+    except Exception as e:
+        console.print(f"[red]Error installing Chocolatey: {e}[/red]")
+        return False
+
+
 def install_packages(packages):
     """Intelligently finds and installs a list of packages."""
     if PACMAN_AVAILABLE:
@@ -175,60 +206,60 @@ def install_packages(packages):
             console.print("Installation cancelled.")
         return
 
-    if WINGET_AVAILABLE:
-        to_install = []
+    # Windows Strategy: Prefer Chocolatey > Winget
+    # Check if we are on Windows or if Windows tools are detected
+    if os.name == 'nt' or WINGET_AVAILABLE or CHOCO_AVAILABLE:
         
-        for package in packages:
-            console.print(f"🔎 Searching for [bold magenta]'{package}'[/bold magenta] via winget...")
-            # Simple check via search? No, show gives better info but harder to parse.
-            # Winget search is noisy. We assume if the user asks, it exists or will fail at install.
-            to_install.append(package)
+        # 1. Chocolatey Handling
+        choco_exe = shutil.which("choco")
+        
+        # If not installed, ask to install (Only on Windows proper)
+        if not choco_exe and os.name == 'nt':
+             if questionary.confirm("Chocolatey is not installed but recommended. Install now?", default=True).ask():
+                 if _install_chocolatey():
+                     choco_exe = shutil.which("choco") or "choco" # Retry detection
 
-        if not to_install:
+        if choco_exe:
+            to_install = []
+            for package in packages:
+                 console.print(f"🔎 Searching for [bold magenta]'{package}'[/bold magenta] via choco...")
+                 to_install.append(package)
+
+            if not to_install:
+                 return
+
+            if config.get("system.default_install_confirm") and not questionary.confirm("Proceed with installation via Chocolatey?").ask():
+                 console.print("Installation cancelled.")
+                 return
+
+            # Install
+            for pkg in to_install:
+                console.print(f"Installing {pkg}...")
+                _run_command(['choco', 'install', pkg, '-y'])
+            console.print("\n✅ Installation complete.")
             return
 
-        if config.get("system.default_install_confirm") and not questionary.confirm("Proceed with installation via Winget?").ask():
-            console.print("Installation cancelled.")
-            return
+        # 2. Winget Handling (Fallback)
+        if WINGET_AVAILABLE:
+            to_install = []
+            for package in packages:
+                console.print(f"🔎 Searching for [bold magenta]'{package}'[/bold magenta] via winget...")
+                to_install.append(package)
 
-        if True:
+            if not to_install:
+                return
+
+            if config.get("system.default_install_confirm") and not questionary.confirm("Proceed with installation via Winget?").ask():
+                console.print("Installation cancelled.")
+                return
+
             for pkg in to_install:
                 console.print(f"Installing {pkg}...")
                 _run_command(['winget', 'install', '-e', '--id', pkg])
             console.print("\n✅ Installation complete.")
-        else:
-            console.print("Installation cancelled.")
-        return
+            return
 
-    if CHOCO_AVAILABLE:
-        to_install = []
-        for package in packages:
-             console.print(f"🔎 Searching for [bold magenta]'{package}'[/bold magenta] via choco...")
-             # 'choco search --exact' is cleaner but might miss partial matches.
-             # We let 'choco install' handle it or do a simple check.
-             # choco search package --local-only (to check if installed)
-             # choco search package (remote)
-             # For now, we assume user wants to try installing it.
-             to_install.append(package)
-
-        if not to_install:
-             return
-
-        if config.get("system.default_install_confirm") and not questionary.confirm("Proceed with installation via Chocolatey?").ask():
-             console.print("Installation cancelled.")
-             return
-
-        if True:
-             for pkg in to_install:
-                 console.print(f"Installing {pkg}...")
-                 # -y for yes to scripts
-                 _run_command(['choco', 'install', pkg, '-y'])
-             console.print("\n✅ Installation complete.")
-        else:
-             console.print("Installation cancelled.")
-        return
-
-    console.print("[bold red]No supported package manager found (pacman/pamac, apt, winget, or choco).[/bold red]")
+    console.print("[bold red]No supported package manager found (pacman/pamac, apt, choco, or winget).[/bold red]")
 
 
 def remove_packages(packages):
@@ -290,41 +321,38 @@ def remove_packages(packages):
             console.print("Removal cancelled.")
         return
 
-    if WINGET_AVAILABLE:
-        to_remove = []
-        for package in packages:
-             to_remove.append(package)
-             
-        if not to_remove:
+    # Windows Strategy: Prefer Check Chocolatey > Winget
+    if os.name == 'nt' or WINGET_AVAILABLE or CHOCO_AVAILABLE:
+        # Check Choco first
+        choco_exe = shutil.which("choco")
+        
+        if choco_exe:
+            to_remove = [p for p in packages]
+            if not to_remove: return
+            
+            if questionary.confirm("Proceed with removal via Chocolatey?").ask():
+                 for pkg in to_remove:
+                     console.print(f"Uninstalling {pkg}...")
+                     _run_command(['choco', 'uninstall', pkg, '-y'])
+                 console.print("\n✅ Removal complete.")
+            else:
+                 console.print("Removal cancelled.")
             return
 
-        if questionary.confirm("Proceed with removal via Winget?").ask():
-             for pkg in to_remove:
-                 console.print(f"Uninstalling {pkg}...")
-                 _run_command(['winget', 'uninstall', '--id', pkg])
-             console.print("\n✅ Removal complete.")
-        else:
-             console.print("Removal cancelled.")
-        return
-
-    if CHOCO_AVAILABLE:
-        to_remove = []
-        for package in packages:
-             to_remove.append(package)
-
-        if not to_remove:
+        if WINGET_AVAILABLE:
+            to_remove = [p for p in packages]
+            if not to_remove: return
+            
+            if questionary.confirm("Proceed with removal via Winget?").ask():
+                 for pkg in to_remove:
+                     console.print(f"Uninstalling {pkg}...")
+                     _run_command(['winget', 'uninstall', '--id', pkg])
+                 console.print("\n✅ Removal complete.")
+            else:
+                 console.print("Removal cancelled.")
             return
-
-        if questionary.confirm("Proceed with removal via Chocolatey?").ask():
-             for pkg in to_remove:
-                 console.print(f"Uninstalling {pkg}...")
-                 _run_command(['choco', 'uninstall', pkg, '-y'])
-             console.print("\n✅ Removal complete.")
-        else:
-             console.print("Removal cancelled.")
-        return
-
-    console.print("[bold red]No supported package manager found (pacman/pamac, apt, winget, or choco).[/bold red]")
+            
+    console.print("[bold red]No supported package manager found (pacman/pamac, apt, choco, or winget).[/bold red]")
 
 
 # --- UPDATED update_system FUNCTION ---
@@ -572,12 +600,13 @@ def update_system(affirmative: bool = False):
         # We'll skip forcing 'pip install --upgrade pip' globally to avoid breaking distro-managed pip.
         console.print(f"\n[dim]Skipping global 'pip' self-update to protect system integrity. Use 'pipx' for global tools.[/dim]")
 
-    # --- Windows (Winget) ---
-    if WINGET_AVAILABLE:
-        run_update("Windows Software (Winget)", ["winget", "upgrade", "--all"])
+    # --- Windows ---
+    if os.name == 'nt' or WINGET_AVAILABLE or CHOCO_AVAILABLE:
+        if shutil.which("choco"):
+            run_update("Windows Software (Chocolatey)", ["choco", "upgrade", "all", "-y"])
 
-    if CHOCO_AVAILABLE:
-        run_update("Windows Software (Chocolatey)", ["choco", "upgrade", "all", "-y"])
+        if shutil.which("winget"):
+            run_update("Windows Software (Winget)", ["winget", "upgrade", "--all"])
 
 
     console.print("\n✅ Full system update process complete.")

@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 ### Added
+- **Setup**: Enhanced menu-driven configuration wizard for granular control.
 - **Scan**: New virus scanning module wrapping ClamAV with interactive folder selection.
 - **Search**: Universal package search across Pacman, Apt, Chocolatey, and Winget.
 - **Remove**: Universal package removal capable of detecting the correct manager.

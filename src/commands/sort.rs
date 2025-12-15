@@ -659,7 +659,9 @@ fn undo_last_operation(history: &mut SortHistory) -> Result<()> {
             if dir.exists() && dir != operation.base_dir {
                 if let Ok(mut entries) = fs::read_dir(&dir) {
                     if entries.next().is_none() {
-                        let _ = fs::remove_dir(&dir);
+                        if let Err(e) = fs::remove_dir(&dir) {
+                            eprintln!("Warning: Failed to remove empty directory {}: {}", dir.display(), e);
+                        }
                     }
                 }
             }

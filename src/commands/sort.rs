@@ -8,6 +8,10 @@ use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
 
+// Size thresholds for file categorization
+const SIZE_SMALL_THRESHOLD: u64 = 1_000_000; // 1 MB
+const SIZE_MEDIUM_THRESHOLD: u64 = 100_000_000; // 100 MB
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SortOperation {
     timestamp: DateTime<Utc>,
@@ -179,6 +183,10 @@ pub fn run(path: String) -> Result<()> {
     Ok(())
 }
 
+fn print_success_message(count: usize) {
+    println!("\n{}", format!("✅ Successfully sorted {} files.", count).green().bold());
+}
+
 fn sort_by_extension(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
     println!("\n{}", "Sorting by extension...".yellow());
     
@@ -208,13 +216,15 @@ fn sort_by_extension(target_dir: &Path, history: &mut SortHistory) -> Result<()>
     };
 
     for file_path in files {
-        if let Some(ext) = file_path.extension() {
-            let ext_str = ext.to_string_lossy().to_string().to_lowercase();
-            let dest_dir = target_dir.join(&ext_str);
-            
-            fs::create_dir_all(&dest_dir)?;
-            
-            let file_name = file_path.file_name().unwrap();
+        let ext_str = file_path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("no_extension")
+            .to_lowercase();
+        
+        let dest_dir = target_dir.join(&ext_str);
+        fs::create_dir_all(&dest_dir)?;
+        
+        if let Some(file_name) = file_path.file_name() {
             let dest_path = dest_dir.join(file_name);
             
             operation.moves.push(FileMove {
@@ -227,10 +237,11 @@ fn sort_by_extension(target_dir: &Path, history: &mut SortHistory) -> Result<()>
         }
     }
 
+    let count = operation.moves.len();
     history.add_operation(operation);
     history.save()?;
     
-    println!("\n{}", format!("✅ Successfully sorted {} files.", history.operations.last().unwrap().moves.len()).green().bold());
+    print_success_message(count);
     Ok(())
 }
 
@@ -263,22 +274,24 @@ fn sort_by_category(target_dir: &Path, history: &mut SortHistory) -> Result<()> 
         
         fs::create_dir_all(&dest_dir)?;
         
-        let file_name = file_path.file_name().unwrap();
-        let dest_path = dest_dir.join(file_name);
-        
-        operation.moves.push(FileMove {
-            from: file_path.clone(),
-            to: dest_path.clone(),
-        });
-        
-        fs::rename(&file_path, &dest_path)?;
-        println!("  {} -> {}/", file_name.to_string_lossy().green(), category);
+        if let Some(file_name) = file_path.file_name() {
+            let dest_path = dest_dir.join(file_name);
+            
+            operation.moves.push(FileMove {
+                from: file_path.clone(),
+                to: dest_path.clone(),
+            });
+            
+            fs::rename(&file_path, &dest_path)?;
+            println!("  {} -> {}/", file_name.to_string_lossy().green(), category);
+        }
     }
 
+    let count = operation.moves.len();
     history.add_operation(operation);
     history.save()?;
     
-    println!("\n{}", format!("✅ Successfully sorted {} files.", history.operations.last().unwrap().moves.len()).green().bold());
+    print_success_message(count);
     Ok(())
 }
 
@@ -327,23 +340,35 @@ fn sort_by_date(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
         let dest_dir = target_dir.join(&date_folder);
         fs::create_dir_all(&dest_dir)?;
         
-        let file_name = file_path.file_name().unwrap();
-        let dest_path = dest_dir.join(file_name);
-        
-        operation.moves.push(FileMove {
-            from: file_path.clone(),
-            to: dest_path.clone(),
-        });
-        
-        fs::rename(&file_path, &dest_path)?;
-        println!("  {} -> {}/", file_name.to_string_lossy().green(), date_folder);
+        if let Some(file_name) = file_path.file_name() {
+            let dest_path = dest_dir.join(file_name);
+            
+            operation.moves.push(FileMove {
+                from: file_path.clone(),
+                to: dest_path.clone(),
+            });
+            
+            fs::rename(&file_path, &dest_path)?;
+            println!("  {} -> {}/", file_name.to_string_lossy().green(), date_folder);
+        }
     }
 
+    let count = operation.moves.len();
     history.add_operation(operation);
     history.save()?;
     
-    println!("\n{}", format!("✅ Successfully sorted {} files.", history.operations.last().unwrap().moves.len()).green().bold());
+    print_success_message(count);
     Ok(())
+}
+
+fn get_size_category(size: u64) -> &'static str {
+    if size < SIZE_SMALL_THRESHOLD {
+        "small"
+    } else if size < SIZE_MEDIUM_THRESHOLD {
+        "medium"
+    } else {
+        "large"
+    }
 }
 
 fn sort_by_size(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
@@ -359,16 +384,7 @@ fn sort_by_size(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
     preview_sort(&files, |f| {
         fs::metadata(f)
             .ok()
-            .map(|m| {
-                let size = m.len();
-                if size < 1_000_000 {
-                    "small"
-                } else if size < 100_000_000 {
-                    "medium"
-                } else {
-                    "large"
-                }
-            })
+            .map(|m| get_size_category(m.len()))
             .unwrap_or("unknown")
             .to_string()
     })?;
@@ -387,37 +403,30 @@ fn sort_by_size(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
     for file_path in files {
         let size_category = fs::metadata(&file_path)
             .ok()
-            .map(|m| {
-                let size = m.len();
-                if size < 1_000_000 {
-                    "small"
-                } else if size < 100_000_000 {
-                    "medium"
-                } else {
-                    "large"
-                }
-            })
+            .map(|m| get_size_category(m.len()))
             .unwrap_or("unknown");
         
         let dest_dir = target_dir.join(size_category);
         fs::create_dir_all(&dest_dir)?;
         
-        let file_name = file_path.file_name().unwrap();
-        let dest_path = dest_dir.join(file_name);
-        
-        operation.moves.push(FileMove {
-            from: file_path.clone(),
-            to: dest_path.clone(),
-        });
-        
-        fs::rename(&file_path, &dest_path)?;
-        println!("  {} -> {}/", file_name.to_string_lossy().green(), size_category);
+        if let Some(file_name) = file_path.file_name() {
+            let dest_path = dest_dir.join(file_name);
+            
+            operation.moves.push(FileMove {
+                from: file_path.clone(),
+                to: dest_path.clone(),
+            });
+            
+            fs::rename(&file_path, &dest_path)?;
+            println!("  {} -> {}/", file_name.to_string_lossy().green(), size_category);
+        }
     }
 
+    let count = operation.moves.len();
     history.add_operation(operation);
     history.save()?;
     
-    println!("\n{}", format!("✅ Successfully sorted {} files.", history.operations.last().unwrap().moves.len()).green().bold());
+    print_success_message(count);
     Ok(())
 }
 
@@ -447,7 +456,9 @@ fn sort_manual(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
     };
 
     for file_path in files {
-        let file_name = file_path.file_name().unwrap().to_string_lossy();
+        let file_name_display = file_path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
         let ext = file_path.extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
@@ -458,9 +469,9 @@ fn sort_manual(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
             .and_then(|cat| categories.iter().position(|c| c.to_lowercase() == cat.to_lowercase()));
 
         let prompt = if let Some(idx) = suggested_idx {
-            format!("📄 {} - Suggested: {}", file_name, categories[idx])
+            format!("📄 {} - Suggested: {}", file_name_display, categories[idx])
         } else {
-            format!("📄 {}", file_name)
+            format!("📄 {}", file_name_display)
         };
 
         let choice = Select::new(&prompt, categories.clone())
@@ -479,22 +490,25 @@ fn sort_manual(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
         let dest_dir = target_dir.join(choice);
         fs::create_dir_all(&dest_dir)?;
         
-        let dest_path = dest_dir.join(file_path.file_name().unwrap());
-        
-        operation.moves.push(FileMove {
-            from: file_path.clone(),
-            to: dest_path.clone(),
-        });
-        
-        fs::rename(&file_path, &dest_path)?;
-        println!("  {} -> {}/", file_name.green(), choice);
+        if let Some(file_name) = file_path.file_name() {
+            let dest_path = dest_dir.join(file_name);
+            
+            operation.moves.push(FileMove {
+                from: file_path.clone(),
+                to: dest_path.clone(),
+            });
+            
+            fs::rename(&file_path, &dest_path)?;
+            println!("  {} -> {}/", file_name_display.green(), choice);
+        }
     }
 
     learning_data.save()?;
+    let count = operation.moves.len();
     history.add_operation(operation);
     history.save()?;
     
-    println!("\n{}", format!("✅ Successfully sorted {} files.", history.operations.last().unwrap().moves.len()).green().bold());
+    print_success_message(count);
     println!("{}", "Your choices have been saved for future smart sorting!".cyan());
     Ok(())
 }
@@ -537,16 +551,17 @@ fn sort_smart(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
             let dest_dir = target_dir.join(category);
             fs::create_dir_all(&dest_dir)?;
             
-            let file_name = file_path.file_name().unwrap();
-            let dest_path = dest_dir.join(file_name);
-            
-            operation.moves.push(FileMove {
-                from: file_path.clone(),
-                to: dest_path.clone(),
-            });
-            
-            fs::rename(&file_path, &dest_path)?;
-            println!("  {} -> {}/", file_name.to_string_lossy().green(), category);
+            if let Some(file_name) = file_path.file_name() {
+                let dest_path = dest_dir.join(file_name);
+                
+                operation.moves.push(FileMove {
+                    from: file_path.clone(),
+                    to: dest_path.clone(),
+                });
+                
+                fs::rename(&file_path, &dest_path)?;
+                println!("  {} -> {}/", file_name.to_string_lossy().green(), category);
+            }
         } else {
             unknown_files.push(file_path);
         }
@@ -567,9 +582,11 @@ fn sort_smart(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
             ];
 
             for file_path in unknown_files {
-                let file_name = file_path.file_name().unwrap().to_string_lossy();
+                let file_name_display = file_path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
                 
-                let choice = Select::new(&format!("📄 {}", file_name), categories.clone())
+                let choice = Select::new(&format!("📄 {}", file_name_display), categories.clone())
                     .prompt()?;
 
                 if choice == "Skip" {
@@ -579,23 +596,26 @@ fn sort_smart(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
                 let dest_dir = target_dir.join(choice);
                 fs::create_dir_all(&dest_dir)?;
                 
-                let dest_path = dest_dir.join(file_path.file_name().unwrap());
-                
-                operation.moves.push(FileMove {
-                    from: file_path.clone(),
-                    to: dest_path.clone(),
-                });
-                
-                fs::rename(&file_path, &dest_path)?;
-                println!("  {} -> {}/", file_name.green(), choice);
+                if let Some(file_name) = file_path.file_name() {
+                    let dest_path = dest_dir.join(file_name);
+                    
+                    operation.moves.push(FileMove {
+                        from: file_path.clone(),
+                        to: dest_path.clone(),
+                    });
+                    
+                    fs::rename(&file_path, &dest_path)?;
+                    println!("  {} -> {}/", file_name_display.green(), choice);
+                }
             }
         }
     }
 
+    let count = operation.moves.len();
     history.add_operation(operation);
     history.save()?;
     
-    println!("\n{}", format!("✅ Successfully sorted {} files.", history.operations.last().unwrap().moves.len()).green().bold());
+    print_success_message(count);
     Ok(())
 }
 
@@ -611,11 +631,19 @@ fn undo_last_operation(history: &mut SortHistory) -> Result<()> {
                     fs::create_dir_all(parent)?;
                 }
                 
-                fs::rename(&file_move.to, &file_move.from)?;
-                println!("  {} <- {}", 
-                    file_move.from.file_name().unwrap().to_string_lossy().green(),
-                    file_move.to.parent().unwrap().file_name().unwrap().to_string_lossy()
-                );
+                if let Err(e) = fs::rename(&file_move.to, &file_move.from) {
+                    eprintln!("Warning: Failed to revert {}: {}", 
+                        file_move.to.display(), e);
+                    continue;
+                }
+                
+                if let (Some(from_name), Some(to_parent)) = 
+                    (file_move.from.file_name(), file_move.to.parent().and_then(|p| p.file_name())) {
+                    println!("  {} <- {}", 
+                        from_name.to_string_lossy().green(),
+                        to_parent.to_string_lossy()
+                    );
+                }
                 reverted += 1;
             }
         }
@@ -629,8 +657,8 @@ fn undo_last_operation(history: &mut SortHistory) -> Result<()> {
         
         for dir in dirs_to_check {
             if dir.exists() && dir != operation.base_dir {
-                if let Ok(entries) = fs::read_dir(&dir) {
-                    if entries.count() == 0 {
+                if let Ok(mut entries) = fs::read_dir(&dir) {
+                    if entries.next().is_none() {
                         let _ = fs::remove_dir(&dir);
                     }
                 }
@@ -638,7 +666,7 @@ fn undo_last_operation(history: &mut SortHistory) -> Result<()> {
         }
         
         history.save()?;
-        println!("\n{}", format!("✅ Reverted {} file moves.", reverted).green().bold());
+        print_success_message(reverted);
     } else {
         println!("No operations to undo.");
     }

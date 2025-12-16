@@ -122,6 +122,7 @@ impl GeminiClient {
     }
 
     fn is_cli_available() -> bool {
+        // Check if 'gemini' CLI tool is available in PATH
         which("gemini").is_ok()
     }
 
@@ -138,6 +139,10 @@ impl GeminiClient {
 
     fn generate_content_cli(&self, prompt: &str) -> Result<String> {
         // Use the gemini CLI to generate content
+        // This assumes the CLI uses the command format: gemini generate <prompt>
+        // NOTE: The prompt is passed as a command argument. Since we use Command::arg()
+        // rather than shell execution, the argument is passed directly to the process
+        // without shell interpretation, preventing command injection vulnerabilities.
         let output = Command::new("gemini")
             .arg("generate")
             .arg(prompt)

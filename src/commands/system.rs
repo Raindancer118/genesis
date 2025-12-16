@@ -260,49 +260,97 @@ pub fn update_revamped(yes: bool, only: Option<String>, verbose: bool, _config: 
         if which("yay").is_ok() {
             updated_count += 1;
             println!("{}", "┌─ System - Arch (yay)".bold().magenta());
+            println!("{}", format!("│  Command: yay {}", args.join(" ")).dimmed());
             let mut cmd = Command::new("yay");
             cmd.args(&args);
             if !verbose {
                 cmd.stdout(std::process::Stdio::null());
                 cmd.stderr(std::process::Stdio::null());
             }
-            let _ = cmd.status();
-            println!("{}", "└─ ✓ Complete\n".green());
+            match cmd.status() {
+                Ok(status) if status.success() => {
+                    println!("{}", format!("└─ {} Success\n", "✓".green()).green());
+                }
+                Ok(_) => {
+                    println!("{}", format!("└─ {} Failed (non-zero exit)\n", "✗".red()).red());
+                    failed_count += 1;
+                }
+                Err(e) => {
+                    println!("{}", format!("└─ {} Error: {}\n", "✗".red(), e).red());
+                    failed_count += 1;
+                }
+            }
         } else if which("paru").is_ok() {
             updated_count += 1;
             println!("{}", "┌─ System - Arch (paru)".bold().magenta());
+            println!("{}", format!("│  Command: paru {}", args.join(" ")).dimmed());
             let mut cmd = Command::new("paru");
             cmd.args(&args);
             if !verbose {
                 cmd.stdout(std::process::Stdio::null());
                 cmd.stderr(std::process::Stdio::null());
             }
-            let _ = cmd.status();
-            println!("{}", "└─ ✓ Complete\n".green());
+            match cmd.status() {
+                Ok(status) if status.success() => {
+                    println!("{}", format!("└─ {} Success\n", "✓".green()).green());
+                }
+                Ok(_) => {
+                    println!("{}", format!("└─ {} Failed (non-zero exit)\n", "✗".red()).red());
+                    failed_count += 1;
+                }
+                Err(e) => {
+                    println!("{}", format!("└─ {} Error: {}\n", "✗".red(), e).red());
+                    failed_count += 1;
+                }
+            }
         } else if which("pamac").is_ok() {
             updated_count += 1;
             let mut p_args = vec!["upgrade"];
             if yes { p_args.push("--no-confirm"); }
             println!("{}", "┌─ System - Arch (pamac)".bold().magenta());
+            println!("{}", format!("│  Command: pamac {}", p_args.join(" ")).dimmed());
             let mut cmd = Command::new("pamac");
             cmd.args(&p_args);
             if !verbose {
                 cmd.stdout(std::process::Stdio::null());
                 cmd.stderr(std::process::Stdio::null());
             }
-            let _ = cmd.status();
-            println!("{}", "└─ ✓ Complete\n".green());
+            match cmd.status() {
+                Ok(status) if status.success() => {
+                    println!("{}", format!("└─ {} Success\n", "✓".green()).green());
+                }
+                Ok(_) => {
+                    println!("{}", format!("└─ {} Failed (non-zero exit)\n", "✗".red()).red());
+                    failed_count += 1;
+                }
+                Err(e) => {
+                    println!("{}", format!("└─ {} Error: {}\n", "✗".red(), e).red());
+                    failed_count += 1;
+                }
+            }
         } else {
             updated_count += 1;
             println!("{}", "┌─ System - Arch (pacman)".bold().magenta());
+            println!("{}", format!("│  Command: sudo pacman {}", args.join(" ")).dimmed());
             let mut cmd = Command::new("sudo");
             cmd.arg("pacman").args(&args);
             if !verbose {
                 cmd.stdout(std::process::Stdio::null());
                 cmd.stderr(std::process::Stdio::null());
             }
-            let _ = cmd.status();
-            println!("{}", "└─ ✓ Complete\n".green());
+            match cmd.status() {
+                Ok(status) if status.success() => {
+                    println!("{}", format!("└─ {} Success\n", "✓".green()).green());
+                }
+                Ok(_) => {
+                    println!("{}", format!("└─ {} Failed (non-zero exit)\n", "✗".red()).red());
+                    failed_count += 1;
+                }
+                Err(e) => {
+                    println!("{}", format!("└─ {} Error: {}\n", "✗".red(), e).red());
+                    failed_count += 1;
+                }
+            }
         }
     }
 
@@ -386,9 +434,26 @@ pub fn update_revamped(yes: bool, only: Option<String>, verbose: bool, _config: 
     }
     
     if which("cargo").is_ok() && should_run!("cargo") {
-        // Try cargo install-update (requires cargo-update to be installed)
-        if which("cargo-install-update").is_ok() {
-            run!("Language", "Cargo", "cargo", ["install-update", "-a"]);
+        // Try cargo install-update (requires cargo-update crate to be installed)
+        // We just attempt to run it; if it fails, it's no big deal
+        updated_count += 1;
+        println!("{}", "┌─ Language - Cargo".bold().magenta());
+        println!("{}", "│  Command: cargo install-update -a".dimmed());
+        let mut cmd = Command::new("cargo");
+        cmd.args(["install-update", "-a"]);
+        if !verbose {
+            cmd.stdout(std::process::Stdio::null());
+            cmd.stderr(std::process::Stdio::null());
+        }
+        match cmd.status() {
+            Ok(status) if status.success() => {
+                println!("{}", format!("└─ {} Success\n", "✓".green()).green());
+            }
+            Ok(_) | Err(_) => {
+                println!("{}", format!("└─ {} Skipped (cargo-update not installed)\n", "⊘".yellow()).yellow());
+                updated_count -= 1;
+                skipped_count += 1;
+            }
         }
     }
     

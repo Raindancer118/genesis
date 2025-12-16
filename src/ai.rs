@@ -2,8 +2,10 @@ use anyhow::{Result, Context};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
+use which::which;
 
 const GEMINI_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent";
 const API_TIMEOUT_SECONDS: u64 = 30;
@@ -80,59 +82,108 @@ struct QuotaViolation {
     quota_id: Option<String>,
 }
 
+enum GeminiMode {
+    Cli,
+    Api {
+        api_key: String,
+        client: reqwest::blocking::Client,
+        last_call_time: std::sync::Mutex<Option<Instant>>,
+    },
+}
+
 pub struct GeminiClient {
-    api_key: String,
-    client: reqwest::blocking::Client,
-    last_call_time: std::sync::Mutex<Option<Instant>>,
+    mode: GeminiMode,
 }
 
 impl GeminiClient {
     pub fn new() -> Result<Self> {
+        // Check if gemini CLI is available first
+        if Self::is_cli_available() {
+            return Ok(Self {
+                mode: GeminiMode::Cli,
+            });
+        }
+        
+        // Fall back to API if CLI is not available
         let api_key = env::var("GEMINI_API_KEY")
-            .context("GEMINI_API_KEY environment variable not set")?;
+            .context("GEMINI_API_KEY environment variable not set and gemini CLI not found")?;
         
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(API_TIMEOUT_SECONDS))
             .build()?;
         
         Ok(Self { 
-            api_key, 
-            client,
-            last_call_time: std::sync::Mutex::new(None),
+            mode: GeminiMode::Api {
+                api_key,
+                client,
+                last_call_time: std::sync::Mutex::new(None),
+            }
         })
     }
 
+    fn is_cli_available() -> bool {
+        which("gemini").is_ok()
+    }
+
     pub fn is_available() -> bool {
-        env::var("GEMINI_API_KEY").is_ok()
+        Self::is_cli_available() || env::var("GEMINI_API_KEY").is_ok()
     }
 
     pub fn generate_content(&self, prompt: &str) -> Result<String> {
-        // Rate limiting: wait 1 second between API calls
-        match self.last_call_time.lock() {
-            Ok(mut last_time) => {
-                if let Some(last) = *last_time {
-                    let elapsed = last.elapsed();
-                    let wait_duration = Duration::from_secs(API_CALL_DELAY_SECONDS);
-                    if elapsed < wait_duration {
-                        let sleep_duration = wait_duration - elapsed;
-                        thread::sleep(sleep_duration);
+        match &self.mode {
+            GeminiMode::Cli => self.generate_content_cli(prompt),
+            GeminiMode::Api { .. } => self.generate_content_api(prompt),
+        }
+    }
+
+    fn generate_content_cli(&self, prompt: &str) -> Result<String> {
+        // Use the gemini CLI to generate content
+        let output = Command::new("gemini")
+            .arg("generate")
+            .arg(prompt)
+            .output()
+            .context("Failed to execute gemini CLI command")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Gemini CLI error: {}", stderr);
+        }
+
+        let stdout = String::from_utf8(output.stdout)
+            .context("Failed to parse gemini CLI output as UTF-8")?;
+
+        Ok(stdout.trim().to_string())
+    }
+
+    fn generate_content_api(&self, prompt: &str) -> Result<String> {
+        if let GeminiMode::Api { last_call_time, .. } = &self.mode {
+            // Rate limiting: wait between API calls
+            match last_call_time.lock() {
+                Ok(mut last_time) => {
+                    if let Some(last) = *last_time {
+                        let elapsed = last.elapsed();
+                        let wait_duration = Duration::from_secs(API_CALL_DELAY_SECONDS);
+                        if elapsed < wait_duration {
+                            let sleep_duration = wait_duration - elapsed;
+                            thread::sleep(sleep_duration);
+                        }
                     }
+                    *last_time = Some(Instant::now());
                 }
-                *last_time = Some(Instant::now());
-            }
-            Err(poisoned) => {
-                // Mutex is poisoned, recover and apply rate limiting anyway
-                eprintln!("Warning: Rate limiting mutex was poisoned, recovering...");
-                let mut last_time = poisoned.into_inner();
-                if let Some(last) = *last_time {
-                    let elapsed = last.elapsed();
-                    let wait_duration = Duration::from_secs(API_CALL_DELAY_SECONDS);
-                    if elapsed < wait_duration {
-                        let sleep_duration = wait_duration - elapsed;
-                        thread::sleep(sleep_duration);
+                Err(poisoned) => {
+                    // Mutex is poisoned, recover and apply rate limiting anyway
+                    eprintln!("Warning: Rate limiting mutex was poisoned, recovering...");
+                    let mut last_time = poisoned.into_inner();
+                    if let Some(last) = *last_time {
+                        let elapsed = last.elapsed();
+                        let wait_duration = Duration::from_secs(API_CALL_DELAY_SECONDS);
+                        if elapsed < wait_duration {
+                            let sleep_duration = wait_duration - elapsed;
+                            thread::sleep(sleep_duration);
+                        }
                     }
+                    *last_time = Some(Instant::now());
                 }
-                *last_time = Some(Instant::now());
             }
         }
         
@@ -140,6 +191,11 @@ impl GeminiClient {
     }
 
     fn generate_content_with_retry(&self, prompt: &str, attempt: u32) -> Result<String> {
+        let (api_key, client) = match &self.mode {
+            GeminiMode::Api { api_key, client, .. } => (api_key, client),
+            GeminiMode::Cli => anyhow::bail!("Cannot use API retry with CLI mode"),
+        };
+
         let request = GeminiRequest {
             contents: vec![Content {
                 parts: vec![Part {
@@ -148,9 +204,9 @@ impl GeminiClient {
             }],
         };
 
-        let url = format!("{}?key={}", GEMINI_API_URL, self.api_key);
+        let url = format!("{}?key={}", GEMINI_API_URL, api_key);
         
-        let response = self.client
+        let response = client
             .post(&url)
             .json(&request)
             .send()

@@ -1,4 +1,5 @@
 use crate::config::ConfigManager;
+use crate::ai::GeminiClient;
 use anyhow::Result;
 use inquire::{Text, Confirm, Select};
 use colored::Colorize;
@@ -7,10 +8,14 @@ use std::env;
 pub fn run(config_manager: &mut ConfigManager) -> Result<()> {
     println!("{}", "🛠️  Genesis Configuration".bold().cyan());
     
-    // Check if Gemini API key is set
-    if env::var("GEMINI_API_KEY").is_err() {
-        println!("\n{}", "📝 Gemini API Key Not Configured".yellow().bold());
-        println!("{}", "To enable AI-assisted file sorting, you need a Gemini API key.");
+    // Check if Gemini is available (CLI or API)
+    if !GeminiClient::is_available() {
+        println!("\n{}", "📝 Gemini Not Configured".yellow().bold());
+        println!("{}", "To enable AI-assisted file sorting, you can either:");
+        println!("\n{}", "Option 1: Use Gemini CLI (Recommended)".bold());
+        println!("  • Install the gemini CLI tool");
+        println!("  • No API key required when using CLI");
+        println!("\n{}", "Option 2: Use Gemini API".bold());
         println!("\n{}", "How to get a Gemini API key:".bold());
         println!("  1. Visit: https://makersuite.google.com/app/apikey");
         println!("  2. Sign in with your Google account");
@@ -40,7 +45,7 @@ pub fn run(config_manager: &mut ConfigManager) -> Result<()> {
         }
         println!();
     } else {
-        println!("{}", "✅ Gemini API key is configured".green());
+        println!("{}", "✅ Gemini is available (CLI or API configured)".green());
         println!();
     }
     

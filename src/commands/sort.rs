@@ -23,6 +23,36 @@ const HIGH_CONFIDENCE_THRESHOLD: f32 = 70.0;
 const AI_SORTING_MIN_CONFIDENCE: f32 = 50.0;
 const MIN_FILES_BEFORE_SMART_SWITCH: usize = 5;
 
+#[derive(Debug)]
+enum UserChoice {
+    Retry,
+    Continue,
+    Abort,
+}
+
+fn handle_ai_error(error: &anyhow::Error, file_name: &str) -> Result<UserChoice> {
+    println!("\n{}", format!("❌ AI Error while processing '{}'", file_name).red().bold());
+    println!("{}", format!("Error: {}", error).red());
+    
+    let options = vec![
+        "Retry this file",
+        "Skip this file and continue with remaining files",
+        "Abort entire operation",
+    ];
+    
+    let choice_idx = Select::new("What would you like to do?", options.clone())
+        .prompt()
+        .context("Failed to get user input")?;
+    
+    // Use exact string matching instead of starts_with for robustness
+    match choice_idx {
+        "Retry this file" => Ok(UserChoice::Retry),
+        "Skip this file and continue with remaining files" => Ok(UserChoice::Continue),
+        "Abort entire operation" => Ok(UserChoice::Abort),
+        _ => Ok(UserChoice::Abort), // Default to abort for safety
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SortOperation {
     timestamp: DateTime<Utc>,
@@ -801,16 +831,39 @@ fn sort_ai_assisted_learning(target_dir: &Path, history: &mut SortHistory) -> Re
         // Get file metadata for AI analysis
         let metadata = get_file_metadata(file_path)?;
         
-        // Ask AI to validate/correct the system's suggestion
-        let (ai_suggestion, confidence) = match ai_client.suggest_category(
-            &file_name_display,
-            &ext,
-            &metadata,
-        ) {
-            Ok(result) => result,
-            Err(e) => {
-                println!("{}", format!("  AI error: {}. Using system suggestion.", e).yellow());
-                (system_suggestion.clone(), 0.0)
+        // Ask AI to validate/correct the system's suggestion with retry support
+        let (ai_suggestion, confidence) = loop {
+            match ai_client.suggest_category(
+                &file_name_display,
+                &ext,
+                &metadata,
+            ) {
+                Ok(result) => break result,
+                Err(e) => {
+                    match handle_ai_error(&e, &file_name_display)? {
+                        UserChoice::Retry => continue, // Retry the AI call
+                        UserChoice::Continue => {
+                            // Skip AI, use system suggestion
+                            println!("{}", "  Using system suggestion.".yellow());
+                            break (system_suggestion.clone(), 0.0);
+                        }
+                        UserChoice::Abort => {
+                            println!("\n{}", "Operation aborted by user.".yellow());
+                            
+                            // Save any moves that were completed
+                            if !operation.moves.is_empty() {
+                                let count = operation.moves.len();
+                                history.add_operation(operation);
+                                history.save()?;
+                                learning_data.save()?;
+                                print_success_message(count);
+                                println!("{}", "AI corrections have been learned!".cyan());
+                            }
+                            
+                            return Ok(());
+                        }
+                    }
+                }
             }
         };
 
@@ -925,16 +978,38 @@ fn sort_ai_learning(target_dir: &Path, history: &mut SortHistory) -> Result<()> 
         // Get file metadata for AI analysis
         let metadata = get_file_metadata(file_path)?;
         
-        // Try AI suggestion
-        let (suggested_category, confidence) = match ai_client.suggest_category(
-            &file_name_display,
-            &ext,
-            &metadata,
-        ) {
-            Ok(result) => result,
-            Err(e) => {
-                println!("{}", format!("  AI error: {}. Asking user instead.", e).yellow());
-                ("Other".to_string(), 0.0)
+        // Try AI suggestion with retry support
+        let (suggested_category, confidence) = loop {
+            match ai_client.suggest_category(
+                &file_name_display,
+                &ext,
+                &metadata,
+            ) {
+                Ok(result) => break result,
+                Err(e) => {
+                    match handle_ai_error(&e, &file_name_display)? {
+                        UserChoice::Retry => continue, // Retry the AI call
+                        UserChoice::Continue => {
+                            // Skip this file and continue
+                            break ("Other".to_string(), 0.0);
+                        }
+                        UserChoice::Abort => {
+                            println!("\n{}", "Operation aborted by user.".yellow());
+                            
+                            // Save any moves that were completed
+                            if !operation.moves.is_empty() {
+                                let count = operation.moves.len();
+                                history.add_operation(operation);
+                                history.save()?;
+                                learning_data.save()?;
+                                print_success_message(count);
+                                println!("{}", format!("Processed {} files before aborting.", count).cyan());
+                            }
+                            
+                            return Ok(());
+                        }
+                    }
+                }
             }
         };
 
@@ -1161,24 +1236,50 @@ fn sort_ai_sorting(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
         // Get file metadata for AI analysis
         let metadata = get_file_metadata(file_path)?;
         
-        // Get AI suggestion
-        let category = match ai_client.suggest_category(
-            &file_name_display,
-            &ext,
-            &metadata,
-        ) {
-            Ok((suggested_category, confidence)) => {
-                if confidence >= AI_SORTING_MIN_CONFIDENCE {
-                    suggested_category
-                } else {
-                    // Low confidence, use fallback
-                    get_category(&file_path).to_string()
+        // Get AI suggestion with retry support
+        let category = loop {
+            match ai_client.suggest_category(
+                &file_name_display,
+                &ext,
+                &metadata,
+            ) {
+                Ok((suggested_category, confidence)) => {
+                    if confidence >= AI_SORTING_MIN_CONFIDENCE {
+                        break suggested_category;
+                    } else {
+                        // Low confidence, use fallback
+                        break get_category(&file_path).to_string();
+                    }
                 }
-            }
-            Err(_) => {
-                // AI error, use fallback categorization
-                failed += 1;
-                get_category(&file_path).to_string()
+                Err(e) => {
+                    println!(); // New line after progress indicator
+                    match handle_ai_error(&e, &file_name_display)? {
+                        UserChoice::Retry => continue, // Retry the AI call
+                        UserChoice::Continue => {
+                            // Skip this file, use fallback
+                            failed += 1;
+                            break get_category(&file_path).to_string();
+                        }
+                        UserChoice::Abort => {
+                            println!("\n{}", "Operation aborted by user.".yellow());
+                            
+                            // Save any moves that were completed
+                            if !operation.moves.is_empty() {
+                                let count = operation.moves.len();
+                                history.add_operation(operation);
+                                history.save()?;
+                                print_success_message(count);
+                                println!("{}", format!("Successfully categorized: {}", successful).green());
+                                if failed > 0 {
+                                    println!("{}", format!("Failed AI categorization (used fallback): {}", failed).yellow());
+                                }
+                                println!("{}", format!("Processed {} out of {} files before aborting.", idx + 1, files.len()).cyan());
+                            }
+                            
+                            return Ok(());
+                        }
+                    }
+                }
             }
         };
 

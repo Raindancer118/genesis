@@ -116,6 +116,37 @@ enum Commands {
     /// Monitor
     #[command(hide = true)]
     Monitor,
+    /// System Benchmark
+    Benchmark,
+    /// Calculator
+    Calc {
+        expression: Option<String>,
+    },
+    /// Environment Variables
+    Env {
+        action: Option<String>,
+    },
+    /// System Logs Viewer
+    Logs {
+        action: Option<String>,
+    },
+    /// Network Diagnostics
+    Network {
+        action: Option<String>,
+    },
+    /// Quick Notes
+    Notes {
+        action: Option<String>,
+    },
+    /// Timer & Stopwatch
+    Timer {
+        mode: Option<String>,
+        duration: Option<String>,
+    },
+    /// Todo Manager
+    Todo {
+        action: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -187,6 +218,30 @@ async fn run_rust(config_manager: &mut config::ConfigManager) -> Result<()> {
         }
         Commands::Health => {
              commands::health::run()?;
+        }
+        Commands::Benchmark => {
+             commands::benchmark::run()?;
+        }
+        Commands::Calc { expression } => {
+             commands::calc::run(expression)?;
+        }
+        Commands::Env { action } => {
+             commands::env::run(action)?;
+        }
+        Commands::Logs { action } => {
+             commands::logs::run(action)?;
+        }
+        Commands::Network { action } => {
+             commands::network::run(action)?;
+        }
+        Commands::Notes { action } => {
+             commands::notes::run(action)?;
+        }
+        Commands::Timer { mode, duration } => {
+             commands::timer::run(mode, duration)?;
+        }
+        Commands::Todo { action } => {
+             commands::todo::run(action)?;
         }
     }
 

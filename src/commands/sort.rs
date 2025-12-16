@@ -7,10 +7,21 @@ use inquire::{Select, Confirm};
 use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
+use crate::ai::GeminiClient;
 
 // Size thresholds for file categorization
 const SIZE_SMALL_THRESHOLD: u64 = 1_000_000; // 1 MB
 const SIZE_MEDIUM_THRESHOLD: u64 = 100_000_000; // 100 MB
+
+// Screenshot detection constants
+const MIN_SCREENSHOT_WIDTH: u32 = 1200;
+const MIN_SCREENSHOT_HEIGHT: u32 = 600;
+const ASPECT_RATIO_TOLERANCE: f64 = 0.15;
+
+// AI sorting constants
+const HIGH_CONFIDENCE_THRESHOLD: f32 = 70.0;
+const AI_SORTING_MIN_CONFIDENCE: f32 = 50.0;
+const MIN_FILES_BEFORE_SMART_SWITCH: usize = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SortOperation {
@@ -111,8 +122,12 @@ enum SortStrategy {
     ByCategory,
     ByDate,
     BySize,
-    Manual,
-    Smart,
+    ManualLearning,      // User manually categorizes each file, system learns
+    AssistedLearning,    // System suggests based on heuristics, user corrects
+    Smart,               // Uses learned patterns automatically
+    AIAssistedLearning,  // System suggests, AI corrects/validates
+    AILearning,          // AI suggests, user corrects
+    AISorting,           // Fully automatic AI-based sorting
 }
 
 pub fn run(path: String) -> Result<()> {
@@ -147,14 +162,22 @@ pub fn run(path: String) -> Result<()> {
     }
 
     // Select sorting strategy
-    let strategy_options = vec![
+    let mut strategy_options = vec![
         "By Extension (group by file type)",
         "By Category (documents, images, videos, etc.)",
         "By Date Modified",
         "By Size (small, medium, large)",
-        "Manual (you choose category for each file)",
-        "Smart (learn from your previous choices)",
+        "Manual Learning (you categorize each file, system learns)",
+        "Assisted Learning (system suggests based on rules, you correct)",
+        "Smart (uses your learned patterns automatically)",
     ];
+    
+    // Only show AI options if API key is available
+    if GeminiClient::is_available() {
+        strategy_options.push("AI-Assisted Learning (system suggests, AI corrects) 🤖");
+        strategy_options.push("AI Learning (AI suggests, you teach) ⚡");
+        strategy_options.push("AI Sorting (fully automatic AI categorization) 🚀");
+    }
 
     let strategy_choice = Select::new("Choose sorting strategy:", strategy_options.clone())
         .prompt()
@@ -165,8 +188,12 @@ pub fn run(path: String) -> Result<()> {
         s if s.starts_with("By Category") => SortStrategy::ByCategory,
         s if s.starts_with("By Date") => SortStrategy::ByDate,
         s if s.starts_with("By Size") => SortStrategy::BySize,
-        s if s.starts_with("Manual") => SortStrategy::Manual,
+        s if s.starts_with("Manual Learning") => SortStrategy::ManualLearning,
+        s if s.starts_with("Assisted Learning") => SortStrategy::AssistedLearning,
         s if s.starts_with("Smart") => SortStrategy::Smart,
+        s if s.starts_with("AI-Assisted Learning") => SortStrategy::AIAssistedLearning,
+        s if s.starts_with("AI Learning") => SortStrategy::AILearning,
+        s if s.starts_with("AI Sorting") => SortStrategy::AISorting,
         _ => SortStrategy::ByExtension,
     };
 
@@ -176,8 +203,12 @@ pub fn run(path: String) -> Result<()> {
         SortStrategy::ByCategory => sort_by_category(target_dir, &mut history)?,
         SortStrategy::ByDate => sort_by_date(target_dir, &mut history)?,
         SortStrategy::BySize => sort_by_size(target_dir, &mut history)?,
-        SortStrategy::Manual => sort_manual(target_dir, &mut history)?,
+        SortStrategy::ManualLearning => sort_manual_learning(target_dir, &mut history)?,
+        SortStrategy::AssistedLearning => sort_assisted_learning(target_dir, &mut history)?,
         SortStrategy::Smart => sort_smart(target_dir, &mut history)?,
+        SortStrategy::AIAssistedLearning => sort_ai_assisted_learning(target_dir, &mut history)?,
+        SortStrategy::AILearning => sort_ai_learning(target_dir, &mut history)?,
+        SortStrategy::AISorting => sort_ai_sorting(target_dir, &mut history)?,
     }
 
     Ok(())
@@ -430,9 +461,9 @@ fn sort_by_size(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
     Ok(())
 }
 
-fn sort_manual(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
-    println!("\n{}", "Manual sorting mode - You choose the category for each file".yellow());
-    println!("{}", "The system will learn from your choices!".cyan());
+fn sort_manual_learning(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
+    println!("\n{}", "Manual Learning mode - Pure manual categorization".yellow());
+    println!("{}", "You choose every file's category. The system learns silently.".cyan());
     
     let files = collect_files(target_dir)?;
     if files.is_empty() {
@@ -510,6 +541,102 @@ fn sort_manual(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
     
     print_success_message(count);
     println!("{}", "Your choices have been saved for future smart sorting!".cyan());
+    Ok(())
+}
+
+fn sort_assisted_learning(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
+    println!("\n{}", "Assisted Learning mode - System suggests, you decide".yellow());
+    println!("{}", "The system uses rules to suggest categories and learns from you.".cyan());
+    
+    let files = collect_files(target_dir)?;
+    if files.is_empty() {
+        println!("No files to sort.");
+        return Ok(());
+    }
+
+    let mut learning_data = LearningData::load().unwrap_or_else(|_| LearningData {
+        extension_categories: HashMap::new(),
+    });
+
+    let categories = vec![
+        "Documents", "Images", "Images/Screenshots", "Videos", "Audio", "Archives",
+        "Code", "Data", "Executables", "Other", "Skip",
+    ];
+
+    let mut operation = SortOperation {
+        timestamp: Utc::now(),
+        base_dir: target_dir.to_path_buf(),
+        moves: Vec::new(),
+    };
+
+    for file_path in files {
+        let file_name_display = file_path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let ext = file_path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        
+        // Get rule-based suggestion
+        let mut suggested_category = get_category(&file_path).to_string();
+        
+        // Check if it might be a screenshot
+        if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp") {
+            if let Ok(true) = detect_screenshot(&file_path) {
+                suggested_category = "Images/Screenshots".to_string();
+            }
+        }
+        
+        // Check if we have a learned category that's different
+        if let Some(learned_cat) = learning_data.extension_categories.get(&ext) {
+            if learned_cat != &suggested_category {
+                suggested_category = learned_cat.clone();
+            }
+        }
+
+        let suggested_idx = categories.iter()
+            .position(|c| c.to_lowercase() == suggested_category.to_lowercase())
+            .unwrap_or(0);
+
+        let prompt = format!("📄 {} - Suggested: {}", file_name_display, suggested_category);
+
+        let choice = Select::new(&prompt, categories.clone())
+            .with_starting_cursor(suggested_idx)
+            .prompt()?;
+
+        if choice == "Skip" {
+            continue;
+        }
+
+        // Learn from user choice
+        if !ext.is_empty() && choice != suggested_category {
+            learning_data.extension_categories.insert(ext.clone(), choice.to_string());
+        }
+
+        let dest_dir = target_dir.join(choice);
+        fs::create_dir_all(&dest_dir)?;
+        
+        if let Some(file_name) = file_path.file_name() {
+            let dest_path = dest_dir.join(file_name);
+            
+            operation.moves.push(FileMove {
+                from: file_path.clone(),
+                to: dest_path.clone(),
+            });
+            
+            fs::rename(&file_path, &dest_path)?;
+            println!("  {} -> {}/", file_name_display.green(), choice);
+        }
+    }
+
+    learning_data.save()?;
+    let count = operation.moves.len();
+    history.add_operation(operation);
+    history.save()?;
+    
+    print_success_message(count);
+    println!("{}", "Your corrections have been learned!".cyan());
     Ok(())
 }
 
@@ -616,6 +743,473 @@ fn sort_smart(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
     history.save()?;
     
     print_success_message(count);
+    Ok(())
+}
+
+fn sort_ai_assisted_learning(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
+    println!("\n{}", "AI-Assisted Learning mode - System suggests, AI validates".yellow());
+    println!("{}", "The system suggests categories based on rules, then AI validates/corrects them.".cyan());
+    
+    let ai_client = match GeminiClient::new() {
+        Ok(client) => client,
+        Err(e) => {
+            println!("{}", format!("Error: Failed to initialize AI client: {}", e).red());
+            println!("{}", "Make sure GEMINI_API_KEY environment variable is set.".yellow());
+            return Ok(());
+        }
+    };
+    
+    let files = collect_files(target_dir)?;
+    if files.is_empty() {
+        println!("No files to sort.");
+        return Ok(());
+    }
+
+    let mut learning_data = LearningData::load().unwrap_or_else(|_| LearningData {
+        extension_categories: HashMap::new(),
+    });
+
+    let mut operation = SortOperation {
+        timestamp: Utc::now(),
+        base_dir: target_dir.to_path_buf(),
+        moves: Vec::new(),
+    };
+
+    for (idx, file_path) in files.iter().enumerate() {
+        let file_name_display = file_path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let ext = file_path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        println!("\n{} [{}/{}]", format!("Processing: {}", file_name_display).bold(), idx + 1, files.len());
+
+        // Get system's rule-based suggestion
+        let mut system_suggestion = get_category(&file_path).to_string();
+        
+        // Check if it might be a screenshot
+        if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp") {
+            if let Ok(true) = detect_screenshot(&file_path) {
+                system_suggestion = "Images/Screenshots".to_string();
+            }
+        }
+
+        println!("  {} suggests: {}", "System".cyan(), system_suggestion);
+
+        // Get file metadata for AI analysis
+        let metadata = get_file_metadata(file_path)?;
+        
+        // Ask AI to validate/correct the system's suggestion
+        let (ai_suggestion, confidence) = match ai_client.suggest_category(
+            &file_name_display,
+            &ext,
+            &metadata,
+        ) {
+            Ok(result) => result,
+            Err(e) => {
+                println!("{}", format!("  AI error: {}. Using system suggestion.", e).yellow());
+                (system_suggestion.clone(), 0.0)
+            }
+        };
+
+        let final_category = if confidence >= HIGH_CONFIDENCE_THRESHOLD && ai_suggestion != system_suggestion {
+            // AI disagrees with high confidence
+            println!("  {} corrects to: {} (confidence: {:.0}%)", "AI".green(), ai_suggestion, confidence);
+            
+            // Ask AI to explain the correction
+            if let Ok(explanation) = ai_client.learn_from_correction(
+                &file_name_display,
+                &system_suggestion,
+                &ai_suggestion,
+            ) {
+                println!("\n  {}", "Why the correction:".cyan().bold());
+                println!("  {}", explanation.trim());
+            }
+            
+            // Learn from AI correction
+            if !ext.is_empty() {
+                learning_data.extension_categories.insert(ext.clone(), ai_suggestion.clone());
+            }
+            
+            ai_suggestion
+        } else if confidence > 0.0 && confidence < HIGH_CONFIDENCE_THRESHOLD && ai_suggestion != system_suggestion {
+            // AI is unsure - keep system suggestion
+            println!("  {} is unsure (confidence: {:.0}%), keeping system suggestion", "AI".yellow(), confidence);
+            system_suggestion
+        } else {
+            // AI agrees or has no strong opinion
+            println!("  {} agrees", "AI".green());
+            system_suggestion
+        };
+
+        let dest_dir = target_dir.join(&final_category);
+        fs::create_dir_all(&dest_dir)?;
+        
+        if let Some(file_name) = file_path.file_name() {
+            let dest_path = dest_dir.join(file_name);
+            
+            operation.moves.push(FileMove {
+                from: file_path.clone(),
+                to: dest_path.clone(),
+            });
+            
+            fs::rename(&file_path, &dest_path)?;
+            println!("  {} -> {}/", file_name_display.green(), final_category);
+        }
+    }
+
+    learning_data.save()?;
+    let count = operation.moves.len();
+    history.add_operation(operation);
+    history.save()?;
+    
+    print_success_message(count);
+    println!("{}", "AI corrections have been learned!".cyan());
+    Ok(())
+}
+
+fn sort_ai_learning(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
+    println!("\n{}", "AI Learning mode - AI suggests, you teach".yellow());
+    println!("{}", "The AI categorizes and you correct it. Both learn from your feedback.".cyan());
+    
+    let ai_client = match GeminiClient::new() {
+        Ok(client) => client,
+        Err(e) => {
+            println!("{}", format!("Error: Failed to initialize AI client: {}", e).red());
+            println!("{}", "Make sure GEMINI_API_KEY environment variable is set.".yellow());
+            return Ok(());
+        }
+    };
+    
+    let files = collect_files(target_dir)?;
+    if files.is_empty() {
+        println!("No files to sort.");
+        return Ok(());
+    }
+
+    let mut learning_data = LearningData::load().unwrap_or_else(|_| LearningData {
+        extension_categories: HashMap::new(),
+    });
+
+    let categories = vec![
+        "Documents", "Images", "Images/Screenshots", "Videos", "Audio", "Archives",
+        "Code", "Data", "Executables", "Other",
+    ];
+
+    let mut operation = SortOperation {
+        timestamp: Utc::now(),
+        base_dir: target_dir.to_path_buf(),
+        moves: Vec::new(),
+    };
+
+    let mut switch_to_smart = false;
+
+    for (idx, file_path) in files.iter().enumerate() {
+        if switch_to_smart {
+            println!("\n{}", "Switching to Smart mode for remaining files...".cyan());
+            break;
+        }
+
+        let file_name_display = file_path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let ext = file_path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        println!("\n{} [{}/{}]", format!("Processing: {}", file_name_display).bold(), idx + 1, files.len());
+
+        // Get file metadata for AI analysis
+        let metadata = get_file_metadata(file_path)?;
+        
+        // Try AI suggestion
+        let (suggested_category, confidence) = match ai_client.suggest_category(
+            &file_name_display,
+            &ext,
+            &metadata,
+        ) {
+            Ok(result) => result,
+            Err(e) => {
+                println!("{}", format!("  AI error: {}. Asking user instead.", e).yellow());
+                ("Other".to_string(), 0.0)
+            }
+        };
+
+        let category = if confidence >= HIGH_CONFIDENCE_THRESHOLD {
+            // High confidence - use AI suggestion
+            println!("  {} suggests: {} (confidence: {:.0}%)", "AI".green(), suggested_category, confidence);
+            
+            let use_suggestion = Confirm::new("Use this category?")
+                .with_default(true)
+                .prompt()?;
+            
+            if use_suggestion {
+                suggested_category.clone()
+            } else {
+                // User disagreed, ask for correct category and learn
+                let correct_category = Select::new("Choose correct category:", categories.clone())
+                    .prompt()?;
+                
+                // Ask AI to learn from this correction
+                if let Ok(explanation) = ai_client.learn_from_correction(
+                    &file_name_display,
+                    &suggested_category,
+                    correct_category,
+                ) {
+                    println!("\n{}", "AI Learning:".cyan().bold());
+                    println!("{}", explanation.trim());
+                }
+                
+                // Save to learning data for future
+                if !ext.is_empty() {
+                    learning_data.extension_categories.insert(ext.clone(), correct_category.to_string());
+                }
+                
+                correct_category.to_string()
+            }
+        } else {
+            // Low confidence - ask user
+            println!("  {} is unsure (confidence: {:.0}%)", "AI".yellow(), confidence);
+            if confidence > 0.0 {
+                println!("  Suggested: {}", suggested_category);
+            }
+            
+            let choice = Select::new("Please choose category:", categories.clone())
+                .prompt()?;
+            
+            // Learn from user choice
+            if !ext.is_empty() {
+                learning_data.extension_categories.insert(ext.clone(), choice.to_string());
+            }
+            
+            choice.to_string()
+        };
+
+        // Ask if user wants to switch to smart mode
+        if idx > MIN_FILES_BEFORE_SMART_SWITCH && !learning_data.extension_categories.is_empty() {
+            let switch = Confirm::new("Switch to Smart mode for remaining files?")
+                .with_default(false)
+                .prompt()
+                .unwrap_or(false);
+            
+            if switch {
+                switch_to_smart = true;
+            }
+        }
+
+        let dest_dir = target_dir.join(&category);
+        fs::create_dir_all(&dest_dir)?;
+        
+        if let Some(file_name) = file_path.file_name() {
+            let dest_path = dest_dir.join(file_name);
+            
+            operation.moves.push(FileMove {
+                from: file_path.clone(),
+                to: dest_path.clone(),
+            });
+            
+            fs::rename(&file_path, &dest_path)?;
+            println!("  {} -> {}/", file_name_display.green(), category);
+        }
+    }
+
+    // If switched to smart mode, process remaining files
+    if switch_to_smart {
+        let remaining_files: Vec<PathBuf> = files.into_iter()
+            .skip(operation.moves.len())
+            .collect();
+        
+        for file_path in remaining_files {
+            let ext = file_path.extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            
+            if let Some(category) = learning_data.extension_categories.get(&ext) {
+                let dest_dir = target_dir.join(category);
+                fs::create_dir_all(&dest_dir)?;
+                
+                if let Some(file_name) = file_path.file_name() {
+                    let dest_path = dest_dir.join(file_name);
+                    
+                    operation.moves.push(FileMove {
+                        from: file_path.clone(),
+                        to: dest_path.clone(),
+                    });
+                    
+                    fs::rename(&file_path, &dest_path)?;
+                    println!("  {} -> {}/", file_name.to_string_lossy().green(), category);
+                }
+            }
+        }
+    }
+
+    learning_data.save()?;
+    let count = operation.moves.len();
+    history.add_operation(operation);
+    history.save()?;
+    
+    print_success_message(count);
+    println!("{}", "AI learning data has been saved!".cyan());
+    Ok(())
+}
+
+fn get_file_metadata(file_path: &Path) -> Result<String> {
+    let mut metadata_parts = Vec::new();
+    
+    if let Ok(meta) = fs::metadata(file_path) {
+        metadata_parts.push(format!("Size: {} bytes", meta.len()));
+        
+        if let Ok(modified) = meta.modified() {
+            if let Ok(datetime) = modified.elapsed() {
+                metadata_parts.push(format!("Modified: {} seconds ago", datetime.as_secs()));
+            }
+        }
+    }
+    
+    // Try to detect if it's a screenshot using image analysis
+    if let Some(ext) = file_path.extension() {
+        let ext_str = ext.to_string_lossy().to_lowercase();
+        if matches!(ext_str.as_str(), "png" | "jpg" | "jpeg" | "webp") {
+            if let Ok(is_screenshot) = detect_screenshot(file_path) {
+                if is_screenshot {
+                    metadata_parts.push("Likely a screenshot (widescreen aspect ratio)".to_string());
+                }
+            }
+        }
+    }
+    
+    Ok(metadata_parts.join(", "))
+}
+
+fn detect_screenshot(file_path: &Path) -> Result<bool> {
+    use image::GenericImageView;
+    
+    let img = image::open(file_path)
+        .context("Failed to open image")?;
+    
+    let (width, height) = img.dimensions();
+    
+    // Check if it's widescreen (16:9 or similar)
+    if width > MIN_SCREENSHOT_WIDTH && height > MIN_SCREENSHOT_HEIGHT {
+        let aspect_ratio = width as f64 / height as f64;
+        let is_widescreen = (aspect_ratio - 16.0/9.0).abs() < ASPECT_RATIO_TOLERANCE
+            || (aspect_ratio - 16.0/10.0).abs() < ASPECT_RATIO_TOLERANCE
+            || (aspect_ratio - 21.0/9.0).abs() < ASPECT_RATIO_TOLERANCE;
+        
+        return Ok(is_widescreen);
+    }
+    
+    Ok(false)
+}
+
+fn sort_ai_sorting(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
+    println!("\n{}", "AI Sorting mode - Fully automatic AI categorization".yellow());
+    println!("{}", "The AI will categorize all files automatically without user input.".cyan());
+    
+    let ai_client = match GeminiClient::new() {
+        Ok(client) => client,
+        Err(e) => {
+            println!("{}", format!("Error: Failed to initialize AI client: {}", e).red());
+            println!("{}", "Make sure GEMINI_API_KEY environment variable is set.".yellow());
+            return Ok(());
+        }
+    };
+    
+    let files = collect_files(target_dir)?;
+    if files.is_empty() {
+        println!("No files to sort.");
+        return Ok(());
+    }
+
+    println!("\n{}", format!("Processing {} files with AI...", files.len()).cyan());
+    
+    // Ask for confirmation before proceeding
+    let proceed = Confirm::new("Proceed with automatic AI sorting?")
+        .with_default(true)
+        .prompt()?;
+    
+    if !proceed {
+        println!("Operation cancelled.");
+        return Ok(());
+    }
+
+    let mut operation = SortOperation {
+        timestamp: Utc::now(),
+        base_dir: target_dir.to_path_buf(),
+        moves: Vec::new(),
+    };
+
+    let mut successful = 0;
+    let mut failed = 0;
+
+    for (idx, file_path) in files.iter().enumerate() {
+        let file_name_display = file_path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let ext = file_path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        print!("\r{} [{}/{}]", "Processing...".cyan(), idx + 1, files.len());
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+
+        // Get file metadata for AI analysis
+        let metadata = get_file_metadata(file_path)?;
+        
+        // Get AI suggestion
+        let category = match ai_client.suggest_category(
+            &file_name_display,
+            &ext,
+            &metadata,
+        ) {
+            Ok((suggested_category, confidence)) => {
+                if confidence >= AI_SORTING_MIN_CONFIDENCE {
+                    suggested_category
+                } else {
+                    // Low confidence, use fallback
+                    get_category(&file_path).to_string()
+                }
+            }
+            Err(_) => {
+                // AI error, use fallback categorization
+                failed += 1;
+                get_category(&file_path).to_string()
+            }
+        };
+
+        let dest_dir = target_dir.join(&category);
+        fs::create_dir_all(&dest_dir)?;
+        
+        if let Some(file_name) = file_path.file_name() {
+            let dest_path = dest_dir.join(file_name);
+            
+            operation.moves.push(FileMove {
+                from: file_path.clone(),
+                to: dest_path.clone(),
+            });
+            
+            fs::rename(&file_path, &dest_path)?;
+            successful += 1;
+        }
+    }
+
+    println!(); // New line after progress
+    
+    let count = operation.moves.len();
+    history.add_operation(operation);
+    history.save()?;
+    
+    print_success_message(count);
+    println!("{}", format!("Successfully categorized: {}", successful).green());
+    if failed > 0 {
+        println!("{}", format!("Failed AI categorization (used fallback): {}", failed).yellow());
+    }
+    println!("{}", "Tip: Use AI-Assisted Learning mode to teach the AI about your preferences!".cyan());
     Ok(())
 }
 

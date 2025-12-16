@@ -103,7 +103,7 @@ Accelerate your development workflow:
 # Create new projects with templates
 genesis new myproject --template rust
 
-# Organize files intelligently
+# Organize files intelligently with AI
 genesis sort ./downloads
 
 # Quick calculations
@@ -118,6 +118,31 @@ genesis logs
 # Network diagnostics
 genesis network
 ```
+
+#### 🤖 AI-Powered File Sorting
+
+Genesis now features **6 intelligent sorting modes** with optional Gemini AI integration:
+
+```bash
+# Sort files in current directory
+genesis sort .
+
+# Available modes:
+# 1. Manual Learning - You categorize, system learns silently
+# 2. Assisted Learning - System suggests, you correct
+# 3. Smart - Uses your learned patterns automatically
+# 4. AI-Assisted Learning - System suggests, AI corrects/validates 🤖
+# 5. AI Learning - AI suggests, you teach ⚡
+# 6. AI Sorting - Fully automatic AI categorization 🚀
+```
+
+**AI Features:**
+- 🎯 Intelligent categorization using Gemini 2.0 Flash
+- 📸 Automatic screenshot detection
+- 🧠 Learns from your corrections and AI validations
+- 💬 AI explains corrections when disagreeing with system
+- 🔄 Switch from AI Learning to smart mode mid-session
+- 📚 AI validates system suggestions in AI-Assisted Learning
 
 ### 📝 Productivity Tools
 
@@ -175,6 +200,32 @@ This opens an interactive menu where you can configure:
 - Search settings (Lightspeed mode, fuzzy threshold)
 - Project defaults
 - System behavior
+- **Gemini API key for AI-assisted sorting** ⚡
+
+#### Setting up Gemini API (Optional - for AI features)
+
+To enable AI-assisted file sorting:
+
+1. **Get your API key:**
+   - Visit: https://makersuite.google.com/app/apikey
+   - Sign in with your Google account
+   - Click 'Create API Key'
+   - Copy the generated key
+
+2. **Configure the key:**
+   ```bash
+   # Add to your shell profile (~/.bashrc, ~/.zshrc, etc.)
+   export GEMINI_API_KEY='your-api-key-here'
+   
+   # Then reload your profile
+   source ~/.bashrc
+   ```
+
+3. **Verify it works:**
+   ```bash
+   genesis sort .
+   # You should now see AI-powered sorting options
+   ```
 
 ### 2. Build Your Search Index
 
@@ -269,8 +320,29 @@ ignore_patterns = [
 | `genesis hero` | Kill resource-intensive processes |
 | `genesis health` | System health check |
 | `genesis new <name>` | Create new project |
-| `genesis sort <path>` | Organize files |
-| `genesis setup` | Interactive configuration |
+| `genesis sort <path>` | Organize files with 5 intelligent modes |
+| `genesis setup` | Interactive configuration (includes Gemini API) |
+
+### File Sorting Modes
+
+Genesis provides **6 intelligent sorting modes**:
+
+| Mode | Description | Learning | AI Required |
+|------|-------------|----------|-------------|
+| **Manual Learning** | You categorize each file manually | ✅ System learns | ❌ No |
+| **Assisted Learning** | System suggests based on rules, you correct | ✅ System learns | ❌ No |
+| **Smart** | Automatically uses your learned patterns | Uses learned data | ❌ No |
+| **AI-Assisted Learning** | System suggests, AI validates/corrects | ✅ AI corrects | ✅ Yes |
+| **AI Learning** | AI suggests, you teach and correct | ✅ Both learn | ✅ Yes |
+| **AI Sorting** | Fully automatic AI categorization | AI categorizes | ✅ Yes |
+
+**Additional features:**
+- 📸 Automatic screenshot detection (detects 16:9, 16:10, 21:9 aspect ratios)
+- 🔄 Switch from AI Learning to smart mode mid-session
+- 💬 AI explains corrections when disagreeing with system
+- 🤖 AI validates system suggestions in AI-Assisted Learning mode
+- 🧠 Persistent learning across sessions
+- ↩️ Undo last operation within 5 minutes
 
 See `genesis --help` for the complete command list.
 

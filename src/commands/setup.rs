@@ -2,9 +2,47 @@ use crate::config::ConfigManager;
 use anyhow::Result;
 use inquire::{Text, Confirm, Select};
 use colored::Colorize;
+use std::env;
 
 pub fn run(config_manager: &mut ConfigManager) -> Result<()> {
     println!("{}", "🛠️  Genesis Configuration".bold().cyan());
+    
+    // Check if Gemini API key is set
+    if env::var("GEMINI_API_KEY").is_err() {
+        println!("\n{}", "📝 Gemini API Key Not Configured".yellow().bold());
+        println!("{}", "To enable AI-assisted file sorting, you need a Gemini API key.");
+        println!("\n{}", "How to get a Gemini API key:".bold());
+        println!("  1. Visit: https://makersuite.google.com/app/apikey");
+        println!("  2. Sign in with your Google account");
+        println!("  3. Click 'Create API Key'");
+        println!("  4. Copy the generated API key");
+        println!("\n{}", "How to set up the API key:".bold());
+        println!("  • Add to your shell profile (~/.bashrc, ~/.zshrc, etc.):");
+        println!("    export GEMINI_API_KEY='your-api-key-here'");
+        println!("  • Or set it temporarily:");
+        println!("    export GEMINI_API_KEY='your-api-key-here'");
+        println!("\n{}", "After setting the key, restart your terminal or run: source ~/.bashrc".cyan());
+        
+        let configure_now = Confirm::new("Would you like to set the API key now (for this session only)?")
+            .with_default(false)
+            .prompt()?;
+        
+        if configure_now {
+            let api_key = Text::new("Enter your Gemini API key:")
+                .with_help_message("The key will only be set for this terminal session")
+                .prompt()?;
+            
+            if !api_key.trim().is_empty() {
+                env::set_var("GEMINI_API_KEY", api_key.trim());
+                println!("{}", "✅ API key set for this session!".green());
+                println!("{}", "Note: Add it to your shell profile for permanent use.".yellow());
+            }
+        }
+        println!();
+    } else {
+        println!("{}", "✅ Gemini API key is configured".green());
+        println!();
+    }
     
     loop {
         let options = vec![

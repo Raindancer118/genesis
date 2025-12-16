@@ -1,4 +1,5 @@
 use anyhow::{Result, Context};
+use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::thread;
@@ -11,7 +12,7 @@ const HIGH_CONFIDENCE_THRESHOLD: f32 = 70.0;
 const MAX_RETRY_ATTEMPTS: u32 = 3;
 const DEFAULT_RETRY_DELAY_SECONDS: u64 = 20;
 const MAX_RETRY_DELAY_SECONDS: u64 = 120;  // Cap exponential backoff at 2 minutes
-const API_CALL_DELAY_SECONDS: u64 = 1;
+const API_CALL_DELAY_SECONDS: u64 = 4; // 15 RPM = 4 seconds per request
 
 #[derive(Debug, Serialize)]
 struct GeminiRequest {
@@ -67,6 +68,16 @@ struct ErrorDetail {
     error_type: String,
     #[serde(rename = "retryDelay")]
     retry_delay: Option<String>,
+    #[serde(rename = "violations")]
+    violations: Option<Vec<QuotaViolation>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QuotaViolation {
+    #[serde(rename = "quotaMetric")]
+    quota_metric: Option<String>,
+    #[serde(rename = "quotaId")]
+    quota_id: Option<String>,
 }
 
 pub struct GeminiClient {
@@ -150,24 +161,40 @@ impl GeminiClient {
             let error_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
             
             // Check if it's a rate limit error (429)
-            if status.as_u16() == 429 && attempt < MAX_RETRY_ATTEMPTS {
-                // Try to parse the error response to get retry delay
+            if status.as_u16() == 429 {
+                // Try to parse the error response to inspect details
                 if let Ok(error_response) = serde_json::from_str::<GeminiErrorResponse>(&error_text) {
-                    let retry_delay = Self::extract_retry_delay(&error_response)
-                        .unwrap_or(DEFAULT_RETRY_DELAY_SECONDS);
-                    
-                    eprintln!("Rate limit exceeded. Retrying in {} seconds... (attempt {}/{})", 
-                        retry_delay, attempt + 1, MAX_RETRY_ATTEMPTS);
-                    
-                    thread::sleep(Duration::from_secs(retry_delay));
-                    return self.generate_content_with_retry(prompt, attempt + 1);
-                } else {
-                    // Couldn't parse error, use exponential backoff (capped at MAX_RETRY_DELAY_SECONDS)
-                    let retry_delay = DEFAULT_RETRY_DELAY_SECONDS
+                    // Check for Daily Quota Exceeded first
+                    if Self::is_daily_quota_exceeded(&error_response) {
+                        anyhow::bail!("Gemini Daily Quota Exceeded. Please try again tomorrow or upgrade your plan.");
+                    }
+
+                    if attempt < MAX_RETRY_ATTEMPTS {
+                        let retry_delay = Self::extract_retry_delay(&error_response)
+                            .unwrap_or_else(|| {
+                                // Default exponential backoff if no delay provided or valid
+                                DEFAULT_RETRY_DELAY_SECONDS
+                                    .saturating_mul(2_u64.saturating_pow(attempt))
+                                    .min(MAX_RETRY_DELAY_SECONDS)
+                            });
+                        
+                        // Enforce a minimum delay if we are retrying, to avoid 0s loops
+                        let final_delay = retry_delay.max(5);
+
+                        eprintln!("{}", format!("Rate limit exceeded. Retrying in {} seconds... (attempt {}/{})", 
+                            final_delay, attempt + 1, MAX_RETRY_ATTEMPTS).yellow());
+                        
+                        thread::sleep(Duration::from_secs(final_delay));
+                        return self.generate_content_with_retry(prompt, attempt + 1);
+                    }
+                } else if attempt < MAX_RETRY_ATTEMPTS {
+                     // Couldn't parse error, use exponential backoff
+                     let retry_delay = DEFAULT_RETRY_DELAY_SECONDS
                         .saturating_mul(2_u64.saturating_pow(attempt))
                         .min(MAX_RETRY_DELAY_SECONDS);
-                    eprintln!("Rate limit exceeded. Retrying in {} seconds... (attempt {}/{})", 
-                        retry_delay, attempt + 1, MAX_RETRY_ATTEMPTS);
+                        
+                     eprintln!("{}", format!("Rate limit exceeded. Retrying in {} seconds... (attempt {}/{})", 
+                        retry_delay, attempt + 1, MAX_RETRY_ATTEMPTS).yellow());
                     
                     thread::sleep(Duration::from_secs(retry_delay));
                     return self.generate_content_with_retry(prompt, attempt + 1);
@@ -205,6 +232,25 @@ impl GeminiClient {
             }
         }
         None
+    }
+
+    fn is_daily_quota_exceeded(error_response: &GeminiErrorResponse) -> bool {
+         if let Some(details) = &error_response.error.details {
+            for detail in details {
+                if detail.error_type == "type.googleapis.com/google.rpc.QuotaFailure" {
+                    if let Some(violations) = &detail.violations {
+                        for violation in violations {
+                            if let Some(id) = &violation.quota_id {
+                                if id.contains("RequestsPerDay") {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Analyze a file and suggest a category

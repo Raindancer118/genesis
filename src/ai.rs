@@ -10,6 +10,7 @@ const DEFAULT_CONFIDENCE: f32 = 50.0;
 const HIGH_CONFIDENCE_THRESHOLD: f32 = 70.0;
 const MAX_RETRY_ATTEMPTS: u32 = 3;
 const DEFAULT_RETRY_DELAY_SECONDS: u64 = 20;
+const API_CALL_DELAY_SECONDS: u64 = 1;
 
 #[derive(Debug, Serialize)]
 struct GeminiRequest {
@@ -70,6 +71,7 @@ struct ErrorDetail {
 pub struct GeminiClient {
     api_key: String,
     client: reqwest::blocking::Client,
+    last_call_time: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 impl GeminiClient {
@@ -81,7 +83,11 @@ impl GeminiClient {
             .timeout(std::time::Duration::from_secs(API_TIMEOUT_SECONDS))
             .build()?;
         
-        Ok(Self { api_key, client })
+        Ok(Self { 
+            api_key, 
+            client,
+            last_call_time: std::sync::Mutex::new(None),
+        })
     }
 
     pub fn is_available() -> bool {
@@ -89,6 +95,19 @@ impl GeminiClient {
     }
 
     pub fn generate_content(&self, prompt: &str) -> Result<String> {
+        // Rate limiting: wait 1 second between API calls
+        if let Ok(mut last_time) = self.last_call_time.lock() {
+            if let Some(last) = *last_time {
+                let elapsed = last.elapsed();
+                let wait_duration = Duration::from_secs(API_CALL_DELAY_SECONDS);
+                if elapsed < wait_duration {
+                    let sleep_duration = wait_duration - elapsed;
+                    thread::sleep(sleep_duration);
+                }
+            }
+            *last_time = Some(std::time::Instant::now());
+        }
+        
         self.generate_content_with_retry(prompt, 0)
     }
 

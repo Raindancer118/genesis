@@ -2,7 +2,7 @@ use anyhow::{Result, Context};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const GEMINI_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent";
 const API_TIMEOUT_SECONDS: u64 = 30;
@@ -10,6 +10,7 @@ const DEFAULT_CONFIDENCE: f32 = 50.0;
 const HIGH_CONFIDENCE_THRESHOLD: f32 = 70.0;
 const MAX_RETRY_ATTEMPTS: u32 = 3;
 const DEFAULT_RETRY_DELAY_SECONDS: u64 = 20;
+const MAX_RETRY_DELAY_SECONDS: u64 = 120;  // Cap exponential backoff at 2 minutes
 const API_CALL_DELAY_SECONDS: u64 = 1;
 
 #[derive(Debug, Serialize)]
@@ -71,7 +72,7 @@ struct ErrorDetail {
 pub struct GeminiClient {
     api_key: String,
     client: reqwest::blocking::Client,
-    last_call_time: std::sync::Mutex<Option<std::time::Instant>>,
+    last_call_time: std::sync::Mutex<Option<Instant>>,
 }
 
 impl GeminiClient {
@@ -105,7 +106,10 @@ impl GeminiClient {
                     thread::sleep(sleep_duration);
                 }
             }
-            *last_time = Some(std::time::Instant::now());
+            *last_time = Some(Instant::now());
+        } else {
+            // Mutex is poisoned, continue but log a warning
+            eprintln!("Warning: Rate limiting mutex is poisoned, continuing without rate limiting");
         }
         
         self.generate_content_with_retry(prompt, 0)
@@ -145,8 +149,9 @@ impl GeminiClient {
                     thread::sleep(Duration::from_secs(retry_delay));
                     return self.generate_content_with_retry(prompt, attempt + 1);
                 } else {
-                    // Couldn't parse error, use exponential backoff
-                    let retry_delay = DEFAULT_RETRY_DELAY_SECONDS * (2_u64.pow(attempt));
+                    // Couldn't parse error, use exponential backoff (capped at MAX_RETRY_DELAY_SECONDS)
+                    let retry_delay = (DEFAULT_RETRY_DELAY_SECONDS * (2_u64.pow(attempt)))
+                        .min(MAX_RETRY_DELAY_SECONDS);
                     eprintln!("Rate limit exceeded. Retrying in {} seconds... (attempt {}/{})", 
                         retry_delay, attempt + 1, MAX_RETRY_ATTEMPTS);
                     

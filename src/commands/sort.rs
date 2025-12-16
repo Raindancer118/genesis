@@ -8,6 +8,7 @@ use serde::{Serialize, Deserialize};
 use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
 use crate::ai::GeminiClient;
+use crate::config::ConfigManager;
 
 // Size thresholds for file categorization
 const SIZE_SMALL_THRESHOLD: u64 = 1_000_000; // 1 MB
@@ -22,6 +23,11 @@ const ASPECT_RATIO_TOLERANCE: f64 = 0.15;
 const HIGH_CONFIDENCE_THRESHOLD: f32 = 70.0;
 const AI_SORTING_MIN_CONFIDENCE: f32 = 50.0;
 const MIN_FILES_BEFORE_SMART_SWITCH: usize = 5;
+
+// Deep sorting constants
+const MAX_FILE_SAMPLE_SIZE: usize = 8192; // Maximum bytes to read from file for analysis
+const CONTENT_PREVIEW_SIZE: usize = 500; // Size of content preview to send to AI
+const MIN_CODE_INDICATORS: usize = 3; // Minimum number of code patterns to consider it code
 
 #[derive(Debug)]
 enum UserChoice {
@@ -158,6 +164,7 @@ enum SortStrategy {
     AIAssistedLearning,  // System suggests, AI corrects/validates
     AILearning,          // AI suggests, user corrects
     AISorting,           // Fully automatic AI-based sorting
+    Deep,                // Deep content-based analysis
 }
 
 pub fn run(path: String) -> Result<()> {
@@ -200,6 +207,7 @@ pub fn run(path: String) -> Result<()> {
         "Manual Learning (you categorize each file, system learns)",
         "Assisted Learning (system suggests based on rules, you correct)",
         "Smart (uses your learned patterns automatically)",
+        "Deep (content-based analysis with AI/heuristics) 🔍",
     ];
     
     // Only show AI options if API key is available
@@ -221,6 +229,7 @@ pub fn run(path: String) -> Result<()> {
         s if s.starts_with("Manual Learning") => SortStrategy::ManualLearning,
         s if s.starts_with("Assisted Learning") => SortStrategy::AssistedLearning,
         s if s.starts_with("Smart") => SortStrategy::Smart,
+        s if s.starts_with("Deep") => SortStrategy::Deep,
         s if s.starts_with("AI-Assisted Learning") => SortStrategy::AIAssistedLearning,
         s if s.starts_with("AI Learning") => SortStrategy::AILearning,
         s if s.starts_with("AI Sorting") => SortStrategy::AISorting,
@@ -236,6 +245,7 @@ pub fn run(path: String) -> Result<()> {
         SortStrategy::ManualLearning => sort_manual_learning(target_dir, &mut history)?,
         SortStrategy::AssistedLearning => sort_assisted_learning(target_dir, &mut history)?,
         SortStrategy::Smart => sort_smart(target_dir, &mut history)?,
+        SortStrategy::Deep => sort_deep(target_dir, &mut history)?,
         SortStrategy::AIAssistedLearning => sort_ai_assisted_learning(target_dir, &mut history)?,
         SortStrategy::AILearning => sort_ai_learning(target_dir, &mut history)?,
         SortStrategy::AISorting => sort_ai_sorting(target_dir, &mut history)?,
@@ -315,6 +325,10 @@ fn sort_by_category(target_dir: &Path, history: &mut SortHistory) -> Result<()> 
         return Ok(());
     }
 
+    // Load configuration for custom destinations
+    let config_manager = ConfigManager::new();
+    let config = config_manager.get();
+
     // Preview
     preview_sort(&files, |f| get_category(f).to_string())?;
 
@@ -331,7 +345,7 @@ fn sort_by_category(target_dir: &Path, history: &mut SortHistory) -> Result<()> 
 
     for file_path in files {
         let category = get_category(&file_path);
-        let dest_dir = target_dir.join(category);
+        let dest_dir = get_destination_for_category(target_dir, category, &config.sort.custom_destinations);
         
         fs::create_dir_all(&dest_dir)?;
         
@@ -344,7 +358,7 @@ fn sort_by_category(target_dir: &Path, history: &mut SortHistory) -> Result<()> 
             });
             
             fs::rename(&file_path, &dest_path)?;
-            println!("  {} -> {}/", file_name.to_string_lossy().green(), category);
+            println!("  {} -> {}", file_name.to_string_lossy().green(), dest_dir.display());
         }
     }
 
@@ -501,6 +515,10 @@ fn sort_manual_learning(target_dir: &Path, history: &mut SortHistory) -> Result<
         return Ok(());
     }
 
+    // Load configuration for custom destinations
+    let config_manager = ConfigManager::new();
+    let config = config_manager.get();
+
     let mut learning_data = LearningData::load().unwrap_or_else(|_| LearningData {
         extension_categories: HashMap::new(),
     });
@@ -548,7 +566,7 @@ fn sort_manual_learning(target_dir: &Path, history: &mut SortHistory) -> Result<
             learning_data.extension_categories.insert(ext.clone(), choice.to_string());
         }
 
-        let dest_dir = target_dir.join(choice);
+        let dest_dir = get_destination_for_category(target_dir, choice, &config.sort.custom_destinations);
         fs::create_dir_all(&dest_dir)?;
         
         if let Some(file_name) = file_path.file_name() {
@@ -560,7 +578,7 @@ fn sort_manual_learning(target_dir: &Path, history: &mut SortHistory) -> Result<
             });
             
             fs::rename(&file_path, &dest_path)?;
-            println!("  {} -> {}/", file_name_display.green(), choice);
+            println!("  {} -> {}", file_name_display.green(), dest_dir.display());
         }
     }
 
@@ -583,6 +601,10 @@ fn sort_assisted_learning(target_dir: &Path, history: &mut SortHistory) -> Resul
         println!("No files to sort.");
         return Ok(());
     }
+
+    // Load configuration for custom destinations
+    let config_manager = ConfigManager::new();
+    let config = config_manager.get();
 
     let mut learning_data = LearningData::load().unwrap_or_else(|_| LearningData {
         extension_categories: HashMap::new(),
@@ -644,7 +666,7 @@ fn sort_assisted_learning(target_dir: &Path, history: &mut SortHistory) -> Resul
             learning_data.extension_categories.insert(ext.clone(), choice.to_string());
         }
 
-        let dest_dir = target_dir.join(choice);
+        let dest_dir = get_destination_for_category(target_dir, choice, &config.sort.custom_destinations);
         fs::create_dir_all(&dest_dir)?;
         
         if let Some(file_name) = file_path.file_name() {
@@ -656,7 +678,7 @@ fn sort_assisted_learning(target_dir: &Path, history: &mut SortHistory) -> Resul
             });
             
             fs::rename(&file_path, &dest_path)?;
-            println!("  {} -> {}/", file_name_display.green(), choice);
+            println!("  {} -> {}", file_name_display.green(), dest_dir.display());
         }
     }
 
@@ -678,6 +700,10 @@ fn sort_smart(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
         println!("No files to sort.");
         return Ok(());
     }
+
+    // Load configuration for custom destinations
+    let config_manager = ConfigManager::new();
+    let config = config_manager.get();
 
     let learning_data = LearningData::load().unwrap_or_else(|_| LearningData {
         extension_categories: HashMap::new(),
@@ -705,7 +731,7 @@ fn sort_smart(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
             .to_lowercase();
         
         if let Some(category) = learning_data.extension_categories.get(&ext) {
-            let dest_dir = target_dir.join(category);
+            let dest_dir = get_destination_for_category(target_dir, category, &config.sort.custom_destinations);
             fs::create_dir_all(&dest_dir)?;
             
             if let Some(file_name) = file_path.file_name() {
@@ -717,7 +743,7 @@ fn sort_smart(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
                 });
                 
                 fs::rename(&file_path, &dest_path)?;
-                println!("  {} -> {}/", file_name.to_string_lossy().green(), category);
+                println!("  {} -> {}", file_name.to_string_lossy().green(), dest_dir.display());
             }
         } else {
             unknown_files.push(file_path);
@@ -750,7 +776,7 @@ fn sort_smart(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
                     continue;
                 }
 
-                let dest_dir = target_dir.join(choice);
+                let dest_dir = get_destination_for_category(target_dir, choice, &config.sort.custom_destinations);
                 fs::create_dir_all(&dest_dir)?;
                 
                 if let Some(file_name) = file_path.file_name() {
@@ -762,7 +788,7 @@ fn sort_smart(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
                     });
                     
                     fs::rename(&file_path, &dest_path)?;
-                    println!("  {} -> {}/", file_name_display.green(), choice);
+                    println!("  {} -> {}", file_name_display.green(), dest_dir.display());
                 }
             }
         }
@@ -794,6 +820,10 @@ fn sort_ai_assisted_learning(target_dir: &Path, history: &mut SortHistory) -> Re
         println!("No files to sort.");
         return Ok(());
     }
+
+    // Load configuration for custom destinations
+    let config_manager = ConfigManager::new();
+    let config = config_manager.get();
 
     let mut learning_data = LearningData::load().unwrap_or_else(|_| LearningData {
         extension_categories: HashMap::new(),
@@ -897,7 +927,7 @@ fn sort_ai_assisted_learning(target_dir: &Path, history: &mut SortHistory) -> Re
             system_suggestion
         };
 
-        let dest_dir = target_dir.join(&final_category);
+        let dest_dir = get_destination_for_category(target_dir, &final_category, &config.sort.custom_destinations);
         fs::create_dir_all(&dest_dir)?;
         
         if let Some(file_name) = file_path.file_name() {
@@ -909,7 +939,7 @@ fn sort_ai_assisted_learning(target_dir: &Path, history: &mut SortHistory) -> Re
             });
             
             fs::rename(&file_path, &dest_path)?;
-            println!("  {} -> {}/", file_name_display.green(), final_category);
+            println!("  {} -> {}", file_name_display.green(), dest_dir.display());
         }
     }
 
@@ -941,6 +971,10 @@ fn sort_ai_learning(target_dir: &Path, history: &mut SortHistory) -> Result<()> 
         println!("No files to sort.");
         return Ok(());
     }
+
+    // Load configuration for custom destinations
+    let config_manager = ConfigManager::new();
+    let config = config_manager.get();
 
     let mut learning_data = LearningData::load().unwrap_or_else(|_| LearningData {
         extension_categories: HashMap::new(),
@@ -1075,7 +1109,7 @@ fn sort_ai_learning(target_dir: &Path, history: &mut SortHistory) -> Result<()> 
             }
         }
 
-        let dest_dir = target_dir.join(&category);
+        let dest_dir = get_destination_for_category(target_dir, &category, &config.sort.custom_destinations);
         fs::create_dir_all(&dest_dir)?;
         
         if let Some(file_name) = file_path.file_name() {
@@ -1087,7 +1121,7 @@ fn sort_ai_learning(target_dir: &Path, history: &mut SortHistory) -> Result<()> 
             });
             
             fs::rename(&file_path, &dest_path)?;
-            println!("  {} -> {}/", file_name_display.green(), category);
+            println!("  {} -> {}", file_name_display.green(), dest_dir.display());
         }
     }
 
@@ -1104,7 +1138,7 @@ fn sort_ai_learning(target_dir: &Path, history: &mut SortHistory) -> Result<()> 
                 .to_lowercase();
             
             if let Some(category) = learning_data.extension_categories.get(&ext) {
-                let dest_dir = target_dir.join(category);
+                let dest_dir = get_destination_for_category(target_dir, category, &config.sort.custom_destinations);
                 fs::create_dir_all(&dest_dir)?;
                 
                 if let Some(file_name) = file_path.file_name() {
@@ -1116,7 +1150,7 @@ fn sort_ai_learning(target_dir: &Path, history: &mut SortHistory) -> Result<()> 
                     });
                     
                     fs::rename(&file_path, &dest_path)?;
-                    println!("  {} -> {}/", file_name.to_string_lossy().green(), category);
+                    println!("  {} -> {}", file_name.to_string_lossy().green(), dest_dir.display());
                 }
             }
         }
@@ -1199,6 +1233,10 @@ fn sort_ai_sorting(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
         println!("No files to sort.");
         return Ok(());
     }
+
+    // Load configuration for custom destinations
+    let config_manager = ConfigManager::new();
+    let config = config_manager.get();
 
     println!("\n{}", format!("Processing {} files with AI...", files.len()).cyan());
     
@@ -1283,7 +1321,7 @@ fn sort_ai_sorting(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
             }
         };
 
-        let dest_dir = target_dir.join(&category);
+        let dest_dir = get_destination_for_category(target_dir, &category, &config.sort.custom_destinations);
         fs::create_dir_all(&dest_dir)?;
         
         if let Some(file_name) = file_path.file_name() {
@@ -1312,6 +1350,243 @@ fn sort_ai_sorting(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
     }
     println!("{}", "Tip: Use AI-Assisted Learning mode to teach the AI about your preferences!".cyan());
     Ok(())
+}
+
+fn sort_deep(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
+    println!("\n{}", "Deep sorting mode - Content-based analysis".yellow());
+    println!("{}", "Analyzing file contents to determine categories...".cyan());
+    
+    let files = collect_files(target_dir)?;
+    if files.is_empty() {
+        println!("No files to sort.");
+        return Ok(());
+    }
+
+    // Load configuration to check for custom destinations
+    let config_manager = ConfigManager::new();
+    let config = config_manager.get();
+    
+    // Try to use AI if available, otherwise fall back to heuristics
+    let use_ai = GeminiClient::is_available();
+    
+    if use_ai {
+        println!("{}", "AI support detected, using AI-enhanced deep analysis".green());
+    } else {
+        println!("{}", "Using heuristic-based deep analysis".yellow());
+    }
+
+    let ai_client = if use_ai {
+        GeminiClient::new().ok()
+    } else {
+        None
+    };
+
+    let mut operation = SortOperation {
+        timestamp: Utc::now(),
+        base_dir: target_dir.to_path_buf(),
+        moves: Vec::new(),
+    };
+
+    let mut successful = 0;
+    let mut failed = 0;
+
+    for (idx, file_path) in files.iter().enumerate() {
+        let file_name_display = file_path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        
+        print!("\r{} [{}/{}]", "Analyzing...".cyan(), idx + 1, files.len());
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+
+        // Perform deep analysis
+        let category = analyze_file_deeply(&file_path, ai_client.as_ref())?;
+        
+        // Determine destination based on config or default
+        let dest_dir = get_destination_for_category(target_dir, &category, &config.sort.custom_destinations);
+        
+        // Create destination directory if it doesn't exist
+        fs::create_dir_all(&dest_dir)?;
+        
+        if let Some(file_name) = file_path.file_name() {
+            let dest_path = dest_dir.join(file_name);
+            
+            // Check if we're actually moving to a different location
+            if dest_path != *file_path {
+                operation.moves.push(FileMove {
+                    from: file_path.clone(),
+                    to: dest_path.clone(),
+                });
+                
+                fs::rename(&file_path, &dest_path)?;
+                successful += 1;
+            }
+        }
+    }
+
+    println!(); // New line after progress
+    
+    let count = operation.moves.len();
+    history.add_operation(operation);
+    history.save()?;
+    
+    print_success_message(count);
+    println!("{}", format!("Successfully categorized: {}", successful).green());
+    if failed > 0 {
+        println!("{}", format!("Failed categorization (used fallback): {}", failed).yellow());
+    }
+    Ok(())
+}
+
+fn analyze_file_deeply(file_path: &Path, ai_client: Option<&GeminiClient>) -> Result<String> {
+    let ext = file_path.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    
+    // First, check if it's an image that might be a screenshot
+    if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp") {
+        if let Ok(true) = detect_screenshot(file_path) {
+            return Ok("Images/Screenshots".to_string());
+        }
+    }
+
+    // For text-based files, read content and analyze
+    if is_text_file(&ext) {
+        if let Ok(content) = read_file_sample(file_path, MAX_FILE_SAMPLE_SIZE) {
+            // Try AI analysis if available
+            if let Some(client) = ai_client {
+                let file_name = file_path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                
+                let metadata = format!("Content preview: {}", &content[..content.len().min(CONTENT_PREVIEW_SIZE)]);
+                
+                if let Ok((category, confidence)) = client.suggest_category(&file_name, &ext, &metadata) {
+                    if confidence >= 60.0 {
+                        return Ok(category);
+                    }
+                }
+            }
+            
+            // Fall back to heuristic analysis
+            return Ok(analyze_text_content(&content, &ext));
+        }
+    }
+    
+    // For binary files or if text analysis fails, use extension-based categorization
+    Ok(get_category(file_path).to_string())
+}
+
+fn is_text_file(ext: &str) -> bool {
+    matches!(
+        ext,
+        "txt" | "md" | "rs" | "py" | "js" | "ts" | "java" | "c" | "cpp" | "h" | "hpp" |
+        "go" | "rb" | "php" | "cs" | "swift" | "kt" | "scala" | "html" | "css" | "json" |
+        "xml" | "yaml" | "yml" | "toml" | "ini" | "conf" | "sh" | "bash" | "zsh" |
+        "log" | "csv" | "sql" | "tex" | "rtf"
+    )
+}
+
+fn read_file_sample(file_path: &Path, max_bytes: usize) -> Result<String> {
+    use std::io::Read;
+    
+    let mut file = fs::File::open(file_path)?;
+    let mut buffer = vec![0; max_bytes];
+    let bytes_read = file.read(&mut buffer)?;
+    buffer.truncate(bytes_read);
+    
+    // Try to convert to string, ignoring invalid UTF-8
+    Ok(String::from_utf8_lossy(&buffer).to_string())
+}
+
+fn analyze_text_content(content: &str, ext: &str) -> String {
+    let content_lower = content.to_lowercase();
+    
+    // Check for code patterns
+    if is_likely_code(&content_lower, ext) {
+        return "Code".to_string();
+    }
+    
+    // Check for configuration files
+    if ext == "json" || ext == "yaml" || ext == "yml" || ext == "toml" || ext == "ini" || ext == "conf" {
+        if content_lower.contains("config") || content_lower.contains("settings") {
+            return "Code".to_string();
+        }
+        return "Data".to_string();
+    }
+    
+    // Check for documentation
+    if content_lower.contains("# ") || content_lower.contains("## ") || 
+       content_lower.contains("documentation") || content_lower.contains("readme") {
+        return "Documents".to_string();
+    }
+    
+    // Check for data files
+    if ext == "csv" || ext == "sql" || content_lower.contains("select") && content_lower.contains("from") {
+        return "Data".to_string();
+    }
+    
+    // Check for logs
+    if ext == "log" || content_lower.contains("error") && content_lower.contains("warning") {
+        return "Documents".to_string();
+    }
+    
+    // Default based on extension
+    match ext {
+        "md" | "txt" | "rtf" | "tex" => "Documents".to_string(),
+        _ => "Documents".to_string(),
+    }
+}
+
+fn is_likely_code(content: &str, ext: &str) -> bool {
+    // Check for common code patterns
+    let code_indicators = [
+        "function ", "def ", "class ", "import ", "require(", "package ",
+        "fn ", "impl ", "trait ", "struct ", "enum ",
+        "public ", "private ", "protected ",
+        "const ", "let ", "var ",
+        "if (", "for (", "while (", "switch (",
+        "try {", "catch (", "finally {",
+        "=>", "->", "/*", "*/", "//",
+    ];
+    
+    let indicator_count = code_indicators.iter()
+        .filter(|&indicator| content.contains(indicator))
+        .count();
+    
+    // If we find multiple code indicators or it's a known code extension, it's likely code
+    indicator_count >= MIN_CODE_INDICATORS || matches!(
+        ext,
+        "rs" | "py" | "js" | "ts" | "java" | "c" | "cpp" | "h" | "hpp" |
+        "go" | "rb" | "php" | "cs" | "swift" | "kt" | "scala"
+    )
+}
+
+fn get_destination_for_category(base_dir: &Path, category: &str, custom_destinations: &HashMap<String, String>) -> PathBuf {
+    // Check if there's a custom destination for this category
+    if let Some(custom_dest) = custom_destinations.get(category) {
+        // Expand ~ to home directory
+        let expanded_dest = if custom_dest.starts_with("~/") {
+            if let Some(home) = dirs::home_dir() {
+                home.join(&custom_dest[2..])
+            } else {
+                PathBuf::from(custom_dest)
+            }
+        } else {
+            PathBuf::from(custom_dest)
+        };
+        
+        // If the custom destination is an absolute path, use it
+        if expanded_dest.is_absolute() {
+            expanded_dest
+        } else {
+            // Otherwise, treat it as relative to base_dir
+            base_dir.join(expanded_dest)
+        }
+    } else {
+        // Use default: subdirectory in base_dir
+        base_dir.join(category)
+    }
 }
 
 fn undo_last_operation(history: &mut SortHistory) -> Result<()> {

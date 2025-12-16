@@ -6,9 +6,9 @@ mod commands;
 
 #[derive(Parser, Debug)]
 #[command(name = "genesis")]
-#[command(author = "Tom <Tom@example.com>")] // Placeholder
-#[command(version = "1.0")]
-#[command(about = "Next-Gen CLI Tool", long_about = None)]
+#[command(author = "Genesis Team")]
+#[command(version = "2.0.0-lightspeed")]
+#[command(about = "⚡ Lightning-fast CLI tool with intelligent search, system management, and automation", long_about = "Genesis is a powerful next-generation CLI tool that combines lightning-fast file search (Lightspeed mode), comprehensive system management, package handling across all major platforms, and intelligent automation features. Built with Rust for maximum performance and reliability.")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -99,9 +99,20 @@ enum Commands {
     Scan { 
         path: Option<String> 
     },
-    /// Search (Not Implemented)
+    /// Search files in the index
     Search { 
+        /// Query string to search for in file names and paths
         query: String 
+    },
+    /// Build file index for search
+    Index {
+        /// Paths to index (uses default from config if not specified)
+        #[arg(short, long)]
+        paths: Vec<String>,
+        
+        /// Display index information
+        #[arg(short, long)]
+        info: bool,
     },
     /// Install (Top level shortcut for legacy parity)
     Install {
@@ -196,7 +207,21 @@ async fn run_rust(config_manager: &mut config::ConfigManager) -> Result<()> {
              commands::scan::run(path.clone())?;
         }
         Commands::Search { query } => {
-             commands::system::search(query, config_manager)?;
+             commands::search::search(query, config_manager)?;
+        }
+        Commands::Index { paths, info } => {
+             if info {
+                 commands::search::info()?;
+             } else {
+                 let paths_to_index: Vec<std::path::PathBuf> = if paths.is_empty() {
+                     config_manager.config.search.default_paths.iter()
+                         .map(|p| std::path::PathBuf::from(p))
+                         .collect()
+                 } else {
+                     paths.iter().map(|p| std::path::PathBuf::from(p)).collect()
+                 };
+                 commands::search::build_index(paths_to_index, config_manager)?;
+             }
         }
         Commands::Install { packages } => {
              commands::system::install(packages, config_manager)?;

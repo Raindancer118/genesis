@@ -10,6 +10,7 @@ pub struct Config {
     pub system: SystemConfig,
     pub hero: HeroConfig,
     pub project: ProjectConfig,
+    pub search: SearchConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -42,6 +43,19 @@ pub struct ProjectConfig {
     pub use_git_init: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SearchConfig {
+    pub default_paths: Vec<String>,
+    pub ignore_patterns: Vec<String>,
+    pub max_depth: usize,
+    pub max_results: usize,
+    pub show_details: bool,
+    pub verbose: bool,
+    pub exclude_hidden: bool,
+    pub lightspeed_mode: bool,
+    pub fuzzy_threshold: usize,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -65,6 +79,30 @@ impl Default for Config {
                 default_email: "".to_string(),
                 default_license: "MIT".to_string(),
                 use_git_init: true,
+            },
+            search: SearchConfig {
+                default_paths: vec![std::env::current_dir()
+                    .unwrap_or_else(|_| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+                    .to_string_lossy()
+                    .to_string()],
+                ignore_patterns: vec![
+                    "node_modules".to_string(),
+                    ".git".to_string(),
+                    "target".to_string(),
+                    ".cache".to_string(),
+                    "__pycache__".to_string(),
+                    ".npm".to_string(),
+                    ".cargo".to_string(),
+                    "venv".to_string(),
+                    ".venv".to_string(),
+                ],
+                max_depth: 10,
+                max_results: 50,
+                show_details: false,
+                verbose: false,
+                exclude_hidden: true,
+                lightspeed_mode: true,
+                fuzzy_threshold: 2,
             },
         }
     }

@@ -18,3 +18,4 @@ pub mod network;
 pub mod notes;
 pub mod timer;
 pub mod todo;
+pub mod search;

@@ -6,9 +6,9 @@ mod commands;
 
 #[derive(Parser, Debug)]
 #[command(name = "genesis")]
-#[command(author = "Tom <Tom@example.com>")] // Placeholder
-#[command(version = "1.0")]
-#[command(about = "Next-Gen CLI Tool", long_about = None)]
+#[command(author = "Genesis Team")]
+#[command(version = "2.0.0-lightspeed")]
+#[command(about = "⚡ Lightning-fast CLI tool with intelligent search, system management, and automation", long_about = "Genesis is a powerful next-generation CLI tool that combines lightning-fast file search (Lightspeed mode), comprehensive system management, package handling across all major platforms, and intelligent automation features. Built with Rust for maximum performance and reliability.")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

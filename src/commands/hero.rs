@@ -1,9 +1,11 @@
-// use sysinfo::{System, SystemExt}; -- Removed
 use sysinfo::System;
 use inquire::MultiSelect;
 use colored::Colorize;
 use std::collections::HashMap;
+use anyhow::Result;
+use comfy_table::{Table, presets::UTF8_FULL, ContentArrangement, Cell, Color};
 
+// Legacy function for backward compatibility
 pub fn run(
     dry_run: bool,
     scope: String,
@@ -13,119 +15,229 @@ pub fn run(
     quiet: bool,
     fast: bool,
 ) {
+    let _ = run_revamped(dry_run, scope, mem_threshold, cpu_threshold, limit, quiet, fast, None);
+}
+
+/// Revamped hero command with enhanced features and better UX
+pub fn run_revamped(
+    dry_run: bool,
+    scope: String,
+    mem_threshold: u64,
+    cpu_threshold: f32,
+    limit: usize,
+    quiet: bool,
+    fast: bool,
+    auto_kill: Option<usize>,
+) -> Result<()> {
+    // Print banner
     if !quiet {
-        println!("{}", "🦸 Hero Mode Initiated".bold().magenta());
+        println!("\n{}", "═══════════════════════════════════════════════════════════".cyan().bold());
+        println!("{}", "              🦸  HERO MODE - PROCESS MANAGER              ".cyan().bold());
+        println!("{}", "═══════════════════════════════════════════════════════════".cyan().bold());
+        println!();
     }
 
+    // Initialize system and refresh
     let mut sys = System::new_all();
-    // Sleep briefly to calculate CPU usage if not fast mode
+    
     if !fast {
-        if !quiet { println!("Sampling CPU usage..."); }
+        if !quiet { 
+            println!("{}", "⏳ Sampling CPU usage (500ms)...".yellow()); 
+        }
         std::thread::sleep(std::time::Duration::from_millis(500));
         sys.refresh_all();
     } else {
         sys.refresh_all();
     }
 
-    let mem_limit_mb = mem_threshold; 
-    let cpu_limit = cpu_threshold;
+    let current_user_name = whoami::username();
+    
+    if !quiet {
+        println!("{} {}", "🔍 Scanning for resource hogs...".yellow(), 
+                 if scope == "user" { 
+                     format!("(user: {})", current_user_name).dimmed() 
+                 } else { 
+                     "(all processes)".dimmed() 
+                 });
+        println!("{} Memory > {} MB, CPU > {}%", 
+                 "📊 Thresholds:".yellow(), 
+                 mem_threshold, 
+                 cpu_threshold);
+        println!();
+    }
 
-    let current_user_uid = get_current_user_uid();
-
+    // Collect target processes
     let mut targets = Vec::new();
+    
+    // Get current user for filtering (best effort)
+    let current_uid_opt = if scope == "user" {
+        // Try to get a process owned by us to compare UIDs
+        sys.processes().iter()
+            .find(|(_, p)| {
+                // Try to find a process we own (like this process or shell)
+                let name = p.name().to_string_lossy();
+                name.contains("genesis") || name.contains("bash") || name.contains("sh")
+            })
+            .and_then(|(_, p)| p.user_id())
+            .map(|uid| uid.clone())
+    } else {
+        None
+    };
 
     for (pid, process) in sys.processes() {
-        if scope == "user" {
-             // Filter by user. simple check
-             if let Some(uid) = process.user_id() {
-                 if let Some(current) = &current_user_uid {
-                      if uid != current { continue; }
-                 }
-             }
+        // Filter by scope if user mode is enabled
+        if let Some(ref current_uid) = current_uid_opt {
+            if let Some(proc_uid) = process.user_id() {
+                if proc_uid != current_uid {
+                    continue; // Skip processes not owned by current user
+                }
+            } else {
+                continue; // Skip processes without user info
+            }
         }
 
-        let mem = process.memory() / 1024 / 1024; // MB
+        let mem_mb = process.memory() / 1024 / 1024; // Convert to MB
         let cpu = process.cpu_usage();
 
-        if (mem > mem_threshold) || (cpu > cpu_threshold) {
-            // Fix: process.name() returns &OsStr in some versions, need string conversion
-            let name = process.name().to_string_lossy();
-            targets.push((*pid, name.into_owned(), mem, cpu));
+        // Check thresholds
+        if mem_mb > mem_threshold || cpu > cpu_threshold {
+            let name = process.name().to_string_lossy().into_owned();
+            let parent = process.parent().map(|p| p.as_u32());
+            targets.push((*pid, name, mem_mb, cpu, parent));
         }
     }
 
-    // Sort by resource usage (heuristic: mem + cpu*factor?)
-    // Let's sort by Memory for now
-    targets.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+    // Sort by combined resource score (memory weight + CPU weight)
+    targets.sort_by(|a, b| {
+        let score_a = (a.2 as f32) + (a.3 * 10.0); // mem_mb + cpu * 10
+        let score_b = (b.2 as f32) + (b.3 * 10.0);
+        score_b.partial_cmp(&score_a).unwrap()
+    });
+    
     targets.truncate(limit);
 
     if targets.is_empty() {
-        if !quiet { println!("{}", "No villains found. System is safe.".green()); }
-        return;
+        if !quiet { 
+            println!("{}", "✨ No resource hogs found. System is healthy! 🎉".green().bold());
+        }
+        return Ok(());
     }
 
-    println!("\n{}", "Found Resource Hogs:".red().bold());
+    // Display results in a nice table
+    if !quiet {
+        println!("{} {} processes found\n", "⚠️  Found".red().bold(), targets.len());
+    }
     
-    // Display and Selection
-    // We can use MultiSelect to let user choose who to kill
-    
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(vec![
+            Cell::new("PID").fg(Color::Cyan),
+            Cell::new("Process Name").fg(Color::Cyan),
+            Cell::new("Memory").fg(Color::Cyan),
+            Cell::new("CPU %").fg(Color::Cyan),
+            Cell::new("Parent PID").fg(Color::Cyan),
+        ]);
+
     let mut choices = Vec::new();
     let mut kill_map = HashMap::new();
 
-    for (pid, name, mem, cpu) in &targets {
-        let label = format!("{:<6} {:<20} Mem: {:<10} CPU: {:.1}%", pid, name, format_bytes(*mem as u64), cpu);
+    for (pid, name, mem, cpu, parent) in &targets {
+        let parent_str = parent.map(|p| p.to_string()).unwrap_or_else(|| "-".to_string());
+        
+        table.add_row(vec![
+            pid.to_string(),
+            name.clone(),
+            format_bytes(*mem as u64 * 1024 * 1024),
+            format!("{:.1}", cpu),
+            parent_str,
+        ]);
+        
+        let label = format!("[PID: {}] {} - {} RAM, {:.1}% CPU", 
+                           pid, name, format_bytes(*mem as u64 * 1024 * 1024), cpu);
         choices.push(label.clone());
         kill_map.insert(label, *pid);
     }
 
-    if dry_run {
-        for c in choices { println!("{}", c); }
-        println!("\nDry run complete.");
-        return;
+    if !quiet {
+        println!("{}", table);
+        println!();
     }
 
-    let selected = MultiSelect::new("Select processes to terminate:", choices)
-        .prompt();
+    // Dry run mode
+    if dry_run {
+        println!("{}", "🔍 Dry run mode - no processes will be terminated".yellow().bold());
+        return Ok(());
+    }
+
+    // Auto-kill mode
+    if let Some(auto_count) = auto_kill {
+        let to_kill = targets.iter().take(auto_count);
+        println!("{}", format!("⚡ Auto-killing top {} processes...", auto_count).yellow().bold());
+        
+        for (pid, name, _, _, _) in to_kill {
+            if let Some(proc) = sys.process(*pid) {
+                print!("  Terminating {} (PID: {})... ", name, pid);
+                if proc.kill() {
+                    println!("{}", "✓ Success".green());
+                } else {
+                    println!("{}", "✗ Failed".red());
+                }
+            }
+        }
+        
+        return Ok(());
+    }
+
+    // Interactive selection mode
+    let selected = MultiSelect::new(
+        "Select processes to terminate (use Space to select, Enter to confirm):", 
+        choices
+    ).prompt();
 
     match selected {
         Ok(selection) => {
             if selection.is_empty() {
-                println!("No action taken.");
-                return;
+                println!("{}", "ℹ️  No processes selected. Exiting.".blue());
+                return Ok(());
             }
+
+            println!("\n{}", "⚠️  Terminating selected processes...".yellow().bold());
+            let mut success_count = 0;
+            let mut fail_count = 0;
 
             for item in selection {
                 if let Some(pid) = kill_map.get(&item) {
-                     if let Some(proc) = sys.process(*pid) {
-                         println!("Killing {} ({})", proc.name().to_string_lossy(), pid);
-                         if proc.kill() {
-                             println!("{}", "Eliminated.".green());
-                         } else {
-                             println!("{}", "Failed to kill.".red());
-                         }
-                     }
+                    if let Some(proc) = sys.process(*pid) {
+                        print!("  Killing {} (PID: {})... ", proc.name().to_string_lossy(), pid);
+                        if proc.kill() {
+                            println!("{}", "✓ Success".green());
+                            success_count += 1;
+                        } else {
+                            println!("{}", "✗ Failed (may require elevated privileges)".red());
+                            fail_count += 1;
+                        }
+                    }
                 }
             }
+            
+            println!();
+            println!("{}", "═══════════════════════════════════════".cyan());
+            println!("{}  Terminated: {}", "✓".green(), success_count);
+            if fail_count > 0 {
+                println!("{}  Failed: {} (try running with sudo)", "✗".red(), fail_count);
+            }
+            println!("{}", "═══════════════════════════════════════".cyan());
         },
-        Err(_) => println!("Aborted."),
+        Err(_) => {
+            println!("{}", "❌ Operation cancelled by user.".yellow());
+        }
     }
+    
+    Ok(())
 }
 
-fn get_current_user_uid() -> Option<sysinfo::Uid> {
-    // This is tricky cross-platform without 'users' crate or similar.
-    // Sysinfo uses generic Uid.
-    // We can iterate processes and find one owned by us? 
-    // Or just rely on scope="all" usually.
-    // For now, return None to skip user check if implied?
-    // Proper way: `users::get_current_uid()`
-    // I didn't add `users` crate.
-    // I added `whoami`.
-    // Sysinfo user_id() returns &Uid.
-    // Let's skip precise implementation of UID matching for now unless strictly needed.
-    // If scope == "user", we can use `whoami::username()` and match `process.user_id()` -> resolve to name?
-    // sysinfo provides `get_user_by_id`.
-    None 
-}
 
 fn format_bytes(bytes: u64) -> String {
     const UNIT: u64 = 1024;

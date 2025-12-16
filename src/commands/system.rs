@@ -144,119 +144,367 @@ fn handle_windows_install(packages: Vec<String>, config: &ConfigManager) -> Resu
 
 // --- UPDATE ---
 pub fn update(yes: bool, _config: &ConfigManager) -> Result<()> {
-    println!("{}", "🔄 System Update Initiated".bold().blue());
+    // Legacy function - redirects to revamped version
+    update_revamped(yes, None, false, _config)
+}
 
-    // Helper macro to run commands
-    macro_rules! run {
-        ($name:expr, $cmd:expr, $args:expr) => {
-             if which($cmd).is_ok() {
-                 println!("{}", format!("--- {} ---", $name).bold().magenta());
-                 let mut c = Command::new($cmd);
-                 c.args($args);
-                 if let Err(e) = c.status() {
-                     println!("{} update failed: {}", $name, e);
-                 }
-             }
+/// Revamped update command with enhanced features
+pub fn update_revamped(yes: bool, only: Option<String>, verbose: bool, _config: &ConfigManager) -> Result<()> {
+    use std::time::Instant;
+    
+    println!("\n{}", "═══════════════════════════════════════════════════════════".cyan().bold());
+    println!("{}", "          🔄  SYSTEM UPDATE - UNIVERSAL PACKAGE MANAGER      ".cyan().bold());
+    println!("{}", "═══════════════════════════════════════════════════════════".cyan().bold());
+    println!();
+    
+    let start = Instant::now();
+    
+    // Parse 'only' filter if provided
+    let filter: Option<Vec<String>> = only.as_ref().map(|s| {
+        s.split(',').map(|x| x.trim().to_lowercase()).collect()
+    });
+    
+    // Helper macro to check if a manager should run
+    macro_rules! should_run {
+        ($name:expr) => {
+            filter.as_ref().map_or(true, |f| {
+                f.iter().any(|x| $name.to_lowercase().contains(x))
+            })
         };
-        (sudo $name:expr, $cmd:expr, $args:expr) => {
-             if which($cmd).is_ok() {
-                 println!("{}", format!("--- {} ---", $name).bold().magenta());
-                 let mut c = Command::new("sudo");
-                 c.arg($cmd).args($args);
-                 if let Err(e) = c.status() {
-                     println!("{} update failed: {}", $name, e);
-                 }
-             }
+    }
+    
+    // Track statistics
+    let mut updated_count = 0;
+    let mut failed_count = 0;
+    let mut skipped_count = 0;
+    
+    // Helper macro to run commands with better output
+    macro_rules! run {
+        ($category:expr, $name:expr, $cmd:expr, $args:expr) => {
+            if which($cmd).is_ok() && should_run!($name) {
+                updated_count += 1;
+                println!("{}", format!("┌─ {} - {}", $category, $name).bold().magenta());
+                println!("{}", format!("│  Command: {} {}", $cmd, $args.join(" ")).dimmed());
+                let mut c = Command::new($cmd);
+                c.args($args);
+                if !verbose {
+                    c.stdout(std::process::Stdio::null());
+                    c.stderr(std::process::Stdio::null());
+                }
+                match c.status() {
+                    Ok(status) if status.success() => {
+                        println!("{}", format!("└─ {} Success\n", "✓".green()).green());
+                    }
+                    Ok(_) => {
+                        println!("{}", format!("└─ {} Failed (non-zero exit)\n", "✗".red()).red());
+                        failed_count += 1;
+                    }
+                    Err(e) => {
+                        println!("{}", format!("└─ {} Error: {}\n", "✗".red(), e).red());
+                        failed_count += 1;
+                    }
+                }
+            } else if which($cmd).is_ok() && !should_run!($name) {
+                skipped_count += 1;
+                if verbose {
+                    println!("{}", format!("⊘ Skipped: {} (filtered)", $name).dimmed());
+                }
+            }
+        };
+        (sudo $category:expr, $name:expr, $cmd:expr, $args:expr) => {
+            if which($cmd).is_ok() && should_run!($name) {
+                updated_count += 1;
+                println!("{}", format!("┌─ {} - {}", $category, $name).bold().magenta());
+                println!("{}", format!("│  Command: sudo {} {}", $cmd, $args.join(" ")).dimmed());
+                let mut c = Command::new("sudo");
+                c.arg($cmd).args($args);
+                if !verbose {
+                    c.stdout(std::process::Stdio::null());
+                    c.stderr(std::process::Stdio::null());
+                }
+                match c.status() {
+                    Ok(status) if status.success() => {
+                        println!("{}", format!("└─ {} Success\n", "✓".green()).green());
+                    }
+                    Ok(_) => {
+                        println!("{}", format!("└─ {} Failed (non-zero exit)\n", "✗".red()).red());
+                        failed_count += 1;
+                    }
+                    Err(e) => {
+                        println!("{}", format!("└─ {} Error: {}\n", "✗".red(), e).red());
+                        failed_count += 1;
+                    }
+                }
+            } else if which($cmd).is_ok() && !should_run!($name) {
+                skipped_count += 1;
+                if verbose {
+                    println!("{}", format!("⊘ Skipped: {} (filtered)", $name).dimmed());
+                }
+            }
         };
     }
 
-    // 1. Arch
-    if which("pacman").is_ok() {
-        println!("{}", "--- Arch Linux ---".bold().blue());
+    if let Some(ref f) = filter {
+        println!("{} Only updating: {}", "🎯".yellow(), f.join(", "));
+        println!();
+    }
+
+    // === SYSTEM PACKAGE MANAGERS ===
+    
+    // 1. Arch Linux
+    if which("pacman").is_ok() && should_run!("arch") {
+        println!("{}", "═══ ARCH LINUX ═══".bold().blue());
         let mut args = vec!["-Syu"];
         if yes { args.push("--noconfirm"); }
+        
         if which("yay").is_ok() {
-            Command::new("yay").args(&args).status()?;
+            updated_count += 1;
+            println!("{}", "┌─ System - Arch (yay)".bold().magenta());
+            println!("{}", format!("│  Command: yay {}", args.join(" ")).dimmed());
+            let mut cmd = Command::new("yay");
+            cmd.args(&args);
+            if !verbose {
+                cmd.stdout(std::process::Stdio::null());
+                cmd.stderr(std::process::Stdio::null());
+            }
+            match cmd.status() {
+                Ok(status) if status.success() => {
+                    println!("{}", format!("└─ {} Success\n", "✓".green()).green());
+                }
+                Ok(_) => {
+                    println!("{}", format!("└─ {} Failed (non-zero exit)\n", "✗".red()).red());
+                    failed_count += 1;
+                }
+                Err(e) => {
+                    println!("{}", format!("└─ {} Error: {}\n", "✗".red(), e).red());
+                    failed_count += 1;
+                }
+            }
         } else if which("paru").is_ok() {
-            Command::new("paru").args(&args).status()?;
+            updated_count += 1;
+            println!("{}", "┌─ System - Arch (paru)".bold().magenta());
+            println!("{}", format!("│  Command: paru {}", args.join(" ")).dimmed());
+            let mut cmd = Command::new("paru");
+            cmd.args(&args);
+            if !verbose {
+                cmd.stdout(std::process::Stdio::null());
+                cmd.stderr(std::process::Stdio::null());
+            }
+            match cmd.status() {
+                Ok(status) if status.success() => {
+                    println!("{}", format!("└─ {} Success\n", "✓".green()).green());
+                }
+                Ok(_) => {
+                    println!("{}", format!("└─ {} Failed (non-zero exit)\n", "✗".red()).red());
+                    failed_count += 1;
+                }
+                Err(e) => {
+                    println!("{}", format!("└─ {} Error: {}\n", "✗".red(), e).red());
+                    failed_count += 1;
+                }
+            }
         } else if which("pamac").is_ok() {
+            updated_count += 1;
             let mut p_args = vec!["upgrade"];
             if yes { p_args.push("--no-confirm"); }
-             Command::new("pamac").args(&p_args).status()?;
+            println!("{}", "┌─ System - Arch (pamac)".bold().magenta());
+            println!("{}", format!("│  Command: pamac {}", p_args.join(" ")).dimmed());
+            let mut cmd = Command::new("pamac");
+            cmd.args(&p_args);
+            if !verbose {
+                cmd.stdout(std::process::Stdio::null());
+                cmd.stderr(std::process::Stdio::null());
+            }
+            match cmd.status() {
+                Ok(status) if status.success() => {
+                    println!("{}", format!("└─ {} Success\n", "✓".green()).green());
+                }
+                Ok(_) => {
+                    println!("{}", format!("└─ {} Failed (non-zero exit)\n", "✗".red()).red());
+                    failed_count += 1;
+                }
+                Err(e) => {
+                    println!("{}", format!("└─ {} Error: {}\n", "✗".red(), e).red());
+                    failed_count += 1;
+                }
+            }
         } else {
-             Command::new("sudo").arg("pacman").args(&args).status()?;
+            updated_count += 1;
+            println!("{}", "┌─ System - Arch (pacman)".bold().magenta());
+            println!("{}", format!("│  Command: sudo pacman {}", args.join(" ")).dimmed());
+            let mut cmd = Command::new("sudo");
+            cmd.arg("pacman").args(&args);
+            if !verbose {
+                cmd.stdout(std::process::Stdio::null());
+                cmd.stderr(std::process::Stdio::null());
+            }
+            match cmd.status() {
+                Ok(status) if status.success() => {
+                    println!("{}", format!("└─ {} Success\n", "✓".green()).green());
+                }
+                Ok(_) => {
+                    println!("{}", format!("└─ {} Failed (non-zero exit)\n", "✗".red()).red());
+                    failed_count += 1;
+                }
+                Err(e) => {
+                    println!("{}", format!("└─ {} Error: {}\n", "✗".red(), e).red());
+                    failed_count += 1;
+                }
+            }
         }
     }
 
-    // 2. Debian
-    if which("apt").is_ok() || which("apt-get").is_ok() {
+    // 2. Debian/Ubuntu
+    if (which("apt").is_ok() || which("apt-get").is_ok()) && should_run!("debian") {
+        println!("{}", "═══ DEBIAN/UBUNTU ═══".bold().blue());
         if which("nala").is_ok() {
-            run!(sudo "Debian (Nala)", "nala", ["upgrade", "-y"]);
+            run!(sudo "System", "Debian (Nala)", "nala", ["upgrade", "-y"]);
         } else {
-            run!(sudo "Debian (Apt)", "apt-get", ["update"]);
+            run!(sudo "System", "Debian (Apt)", "apt-get", ["update"]);
             let mut args = vec!["upgrade"];
             if yes { args.push("-y"); }
-            run!(sudo "Debian (Apt)", "apt-get", args);
+            run!(sudo "System", "Debian (Apt)", "apt-get", args);
         }
     }
 
-    // 3. Fedora
-    let mut dnf_args = vec!["upgrade", "--refresh"];
-    if yes { dnf_args.push("-y"); }
-    run!(sudo "Fedora (DNF)", "dnf", dnf_args);
+    // 3. Fedora/RHEL
+    if which("dnf").is_ok() && should_run!("fedora") {
+        println!("{}", "═══ FEDORA/RHEL ═══".bold().blue());
+        let mut dnf_args = vec!["upgrade", "--refresh"];
+        if yes { dnf_args.push("-y"); }
+        run!(sudo "System", "Fedora (DNF)", "dnf", dnf_args);
+    }
 
     // 4. OpenSUSE
-    let mut zyp_args = vec!["update"];
-    if yes { zyp_args.push("-y"); }
-    run!(sudo "OpenSUSE (Zypper)", "zypper", zyp_args);
+    if which("zypper").is_ok() && should_run!("opensuse") {
+        println!("{}", "═══ OPENSUSE ═══".bold().blue());
+        let mut zyp_args = vec!["update"];
+        if yes { zyp_args.push("-y"); }
+        run!(sudo "System", "OpenSUSE (Zypper)", "zypper", zyp_args);
+    }
 
     // 5. Alpine
-    run!(sudo "Alpine (APK)", "apk", ["upgrade"]);
+    if which("apk").is_ok() && should_run!("alpine") {
+        println!("{}", "═══ ALPINE ═══".bold().blue());
+        run!(sudo "System", "Alpine (APK)", "apk", ["upgrade"]);
+    }
 
     // 6. Void
-    run!(sudo "Void (XBPS)", "xbps-install", ["-Su"]);
+    if which("xbps-install").is_ok() && should_run!("void") {
+        println!("{}", "═══ VOID LINUX ═══".bold().blue());
+        run!(sudo "System", "Void (XBPS)", "xbps-install", ["-Su"]);
+    }
 
     // 7. Gentoo
-    // emerge --sync usually separate, but let's do update world
-    // emerge -auUDN @world
-    run!(sudo "Gentoo (Emerge)", "emerge", ["-uUDN", "@world"]);
+    if which("emerge").is_ok() && should_run!("gentoo") {
+        println!("{}", "═══ GENTOO ═══".bold().blue());
+        run!(sudo "System", "Gentoo (Emerge)", "emerge", ["-uUDN", "@world"]);
+    }
 
     // 8. Nix
-    // nix-channel --update && nix-env -u
-    // Handling just nix-env -u for now as user-level
-    run!("Nix", "nix-env", ["-u"]);
-
-    // 9. Homebrew
-    run!("Homebrew", "brew", ["upgrade"]);
-
-    // --- Universal ---
-    let mut flat_args = vec!["update"];
-    if yes { flat_args.push("-y"); }
-    run!("Flatpak", "flatpak", flat_args);
-
-    run!(sudo "Snap", "snap", ["refresh"]);
-
-    // --- Language ---
-    if which("cargo").is_ok() {
-         // Try cargo install-update
-         let _ = Command::new("cargo").args(["install-update", "-a"]).status();
+    if which("nix-env").is_ok() && should_run!("nix") {
+        println!("{}", "═══ NIX ═══".bold().blue());
+        run!("System", "Nix", "nix-env", ["-u"]);
     }
-    run!(sudo "NPM Global", "npm", ["update", "-g"]);
-    run!("Ruby Gems", "gem", ["update"]);
-    run!("Pipx", "pipx", ["upgrade-all"]);
 
-    // --- Windows ---
+    // 9. Homebrew (macOS/Linux)
+    if which("brew").is_ok() && should_run!("brew") {
+        println!("{}", "═══ HOMEBREW ═══".bold().blue());
+        run!("System", "Homebrew", "brew", ["upgrade"]);
+    }
+
+    // === UNIVERSAL PACKAGE MANAGERS ===
+    if should_run!("flatpak") || should_run!("snap") {
+        println!("{}", "═══ UNIVERSAL ═══".bold().blue());
+    }
+    
+    if which("flatpak").is_ok() && should_run!("flatpak") {
+        let mut flat_args = vec!["update"];
+        if yes { flat_args.push("-y"); }
+        run!("Universal", "Flatpak", "flatpak", flat_args);
+    }
+
+    if which("snap").is_ok() && should_run!("snap") {
+        run!(sudo "Universal", "Snap", "snap", ["refresh"]);
+    }
+
+    // === LANGUAGE PACKAGE MANAGERS ===
+    if should_run!("cargo") || should_run!("npm") || should_run!("gem") || should_run!("pipx") {
+        println!("{}", "═══ LANGUAGE TOOLS ═══".bold().blue());
+    }
+    
+    if which("cargo").is_ok() && should_run!("cargo") {
+        // Try cargo install-update (requires cargo-update crate to be installed)
+        // We just attempt to run it; if it fails, it's no big deal
+        println!("{}", "┌─ Language - Cargo".bold().magenta());
+        println!("{}", "│  Command: cargo install-update -a".dimmed());
+        let mut cmd = Command::new("cargo");
+        cmd.args(["install-update", "-a"]);
+        if !verbose {
+            cmd.stdout(std::process::Stdio::null());
+            cmd.stderr(std::process::Stdio::null());
+        }
+        match cmd.status() {
+            Ok(status) if status.success() => {
+                println!("{}", format!("└─ {} Success\n", "✓".green()).green());
+                updated_count += 1;
+            }
+            Ok(_) | Err(_) => {
+                println!("{}", format!("└─ {} Skipped (cargo-update not installed)\n", "⊘".yellow()).yellow());
+                skipped_count += 1;
+            }
+        }
+    }
+    
+    if which("npm").is_ok() && should_run!("npm") {
+        run!(sudo "Language", "NPM Global", "npm", ["update", "-g"]);
+    }
+    
+    if which("gem").is_ok() && should_run!("gem") {
+        run!("Language", "Ruby Gems", "gem", ["update"]);
+    }
+    
+    if which("pipx").is_ok() && should_run!("pipx") {
+        run!("Language", "Pipx", "pipx", ["upgrade-all"]);
+    }
+
+    // === WINDOWS PACKAGE MANAGERS ===
     if cfg!(windows) {
-        let mut choco_args = vec!["upgrade", "all"];
-        if yes { choco_args.push("-y"); }
-        run!("Chocolatey", "choco", choco_args);
-
-        run!("Winget", "winget", ["upgrade", "--all"]);
+        if should_run!("choco") || should_run!("winget") || should_run!("scoop") {
+            println!("{}", "═══ WINDOWS ═══".bold().blue());
+        }
         
-        run!("Scoop", "scoop", ["update", "*"]);
+        if which("choco").is_ok() && should_run!("choco") {
+            let mut choco_args = vec!["upgrade", "all"];
+            if yes { choco_args.push("-y"); }
+            run!("Windows", "Chocolatey", "choco", choco_args);
+        }
+
+        if which("winget").is_ok() && should_run!("winget") {
+            run!("Windows", "Winget", "winget", ["upgrade", "--all"]);
+        }
+        
+        if which("scoop").is_ok() && should_run!("scoop") {
+            run!("Windows", "Scoop", "scoop", ["update", "*"]);
+        }
     }
 
-    println!("{}", "\n✅ Universal system update complete.".bold().green());
+    let elapsed = start.elapsed();
+    
+    println!("{}", "═══════════════════════════════════════════════════════════".cyan().bold());
+    println!("{}", "                    UPDATE COMPLETE                        ".cyan().bold());
+    println!("{}", "═══════════════════════════════════════════════════════════".cyan().bold());
+    println!();
+    println!("{}  Updated: {}", "✓".green(), updated_count);
+    if failed_count > 0 {
+        println!("{}  Failed: {}", "✗".red(), failed_count);
+    }
+    if skipped_count > 0 {
+        println!("{}  Skipped: {}", "⊘".yellow(), skipped_count);
+    }
+    println!("{}  Time: {:.1}s", "⏱️ ", elapsed.as_secs_f32());
+    println!();
+    
     Ok(())
 }
 

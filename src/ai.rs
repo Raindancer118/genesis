@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::env;
 
 const GEMINI_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent";
+const API_TIMEOUT_SECONDS: u64 = 30;
+const DEFAULT_CONFIDENCE: f32 = 50.0;
+const HIGH_CONFIDENCE_THRESHOLD: f32 = 70.0;
 
 #[derive(Debug, Serialize)]
 struct GeminiRequest {
@@ -50,7 +53,7 @@ impl GeminiClient {
             .context("GEMINI_API_KEY environment variable not set")?;
         
         let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(API_TIMEOUT_SECONDS))
             .build()?;
         
         Ok(Self { api_key, client })
@@ -149,7 +152,7 @@ Consider:
         }
         
         // Fallback if parsing fails
-        Ok(("Other".to_string(), 30.0))
+        Ok(("Other".to_string(), DEFAULT_CONFIDENCE))
     }
 
     /// Ask user why the previous sorting was wrong and learn from it
@@ -175,7 +178,7 @@ Keep your response concise and technical."#,
 
     /// Determine if AI should ask for help (low confidence)
     pub fn should_ask_user(confidence: f32) -> bool {
-        confidence < 70.0
+        confidence < HIGH_CONFIDENCE_THRESHOLD
     }
 }
 
@@ -193,7 +196,7 @@ mod tests {
     fn test_should_ask_user() {
         assert!(GeminiClient::should_ask_user(50.0));
         assert!(GeminiClient::should_ask_user(69.0));
-        assert!(!GeminiClient::should_ask_user(70.0));
+        assert!(!GeminiClient::should_ask_user(HIGH_CONFIDENCE_THRESHOLD));
         assert!(!GeminiClient::should_ask_user(95.0));
     }
 }

@@ -13,6 +13,16 @@ use crate::ai::GeminiClient;
 const SIZE_SMALL_THRESHOLD: u64 = 1_000_000; // 1 MB
 const SIZE_MEDIUM_THRESHOLD: u64 = 100_000_000; // 100 MB
 
+// Screenshot detection constants
+const MIN_SCREENSHOT_WIDTH: u32 = 1200;
+const MIN_SCREENSHOT_HEIGHT: u32 = 600;
+const ASPECT_RATIO_TOLERANCE: f64 = 0.15;
+
+// AI sorting constants
+const HIGH_CONFIDENCE_THRESHOLD: f32 = 70.0;
+const AI_SORTING_MIN_CONFIDENCE: f32 = 50.0;
+const MIN_FILES_BEFORE_SMART_SWITCH: usize = 5;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SortOperation {
     timestamp: DateTime<Utc>,
@@ -804,7 +814,7 @@ fn sort_ai_assisted_learning(target_dir: &Path, history: &mut SortHistory) -> Re
             }
         };
 
-        let final_category = if confidence >= 70.0 && ai_suggestion != system_suggestion {
+        let final_category = if confidence >= HIGH_CONFIDENCE_THRESHOLD && ai_suggestion != system_suggestion {
             // AI disagrees with high confidence
             println!("  {} corrects to: {} (confidence: {:.0}%)", "AI".green(), ai_suggestion, confidence);
             
@@ -824,7 +834,7 @@ fn sort_ai_assisted_learning(target_dir: &Path, history: &mut SortHistory) -> Re
             }
             
             ai_suggestion
-        } else if confidence > 0.0 && confidence < 70.0 && ai_suggestion != system_suggestion {
+        } else if confidence > 0.0 && confidence < HIGH_CONFIDENCE_THRESHOLD && ai_suggestion != system_suggestion {
             // AI is unsure - keep system suggestion
             println!("  {} is unsure (confidence: {:.0}%), keeping system suggestion", "AI".yellow(), confidence);
             system_suggestion
@@ -928,7 +938,7 @@ fn sort_ai_learning(target_dir: &Path, history: &mut SortHistory) -> Result<()> 
             }
         };
 
-        let category = if confidence >= 70.0 {
+        let category = if confidence >= HIGH_CONFIDENCE_THRESHOLD {
             // High confidence - use AI suggestion
             println!("  {} suggests: {} (confidence: {:.0}%)", "AI".green(), suggested_category, confidence);
             
@@ -979,7 +989,7 @@ fn sort_ai_learning(target_dir: &Path, history: &mut SortHistory) -> Result<()> 
         };
 
         // Ask if user wants to switch to smart mode
-        if idx > 5 && !learning_data.extension_categories.is_empty() {
+        if idx > MIN_FILES_BEFORE_SMART_SWITCH && !learning_data.extension_categories.is_empty() {
             let switch = Confirm::new("Switch to Smart mode for remaining files?")
                 .with_default(false)
                 .prompt()
@@ -1084,11 +1094,11 @@ fn detect_screenshot(file_path: &Path) -> Result<bool> {
     let (width, height) = img.dimensions();
     
     // Check if it's widescreen (16:9 or similar)
-    if width > 1200 && height > 600 {
+    if width > MIN_SCREENSHOT_WIDTH && height > MIN_SCREENSHOT_HEIGHT {
         let aspect_ratio = width as f64 / height as f64;
-        let is_widescreen = (aspect_ratio - 16.0/9.0).abs() < 0.15 
-            || (aspect_ratio - 16.0/10.0).abs() < 0.15
-            || (aspect_ratio - 21.0/9.0).abs() < 0.15;
+        let is_widescreen = (aspect_ratio - 16.0/9.0).abs() < ASPECT_RATIO_TOLERANCE
+            || (aspect_ratio - 16.0/10.0).abs() < ASPECT_RATIO_TOLERANCE
+            || (aspect_ratio - 21.0/9.0).abs() < ASPECT_RATIO_TOLERANCE;
         
         return Ok(is_widescreen);
     }
@@ -1158,7 +1168,7 @@ fn sort_ai_sorting(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
             &metadata,
         ) {
             Ok((suggested_category, confidence)) => {
-                if confidence >= 50.0 {
+                if confidence >= AI_SORTING_MIN_CONFIDENCE {
                     suggested_category
                 } else {
                     // Low confidence, use fallback

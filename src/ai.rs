@@ -97,19 +97,32 @@ impl GeminiClient {
 
     pub fn generate_content(&self, prompt: &str) -> Result<String> {
         // Rate limiting: wait 1 second between API calls
-        if let Ok(mut last_time) = self.last_call_time.lock() {
-            if let Some(last) = *last_time {
-                let elapsed = last.elapsed();
-                let wait_duration = Duration::from_secs(API_CALL_DELAY_SECONDS);
-                if elapsed < wait_duration {
-                    let sleep_duration = wait_duration - elapsed;
-                    thread::sleep(sleep_duration);
+        match self.last_call_time.lock() {
+            Ok(mut last_time) => {
+                if let Some(last) = *last_time {
+                    let elapsed = last.elapsed();
+                    let wait_duration = Duration::from_secs(API_CALL_DELAY_SECONDS);
+                    if elapsed < wait_duration {
+                        let sleep_duration = wait_duration - elapsed;
+                        thread::sleep(sleep_duration);
+                    }
                 }
+                *last_time = Some(Instant::now());
             }
-            *last_time = Some(Instant::now());
-        } else {
-            // Mutex is poisoned, continue but log a warning
-            eprintln!("Warning: Rate limiting mutex is poisoned, continuing without rate limiting");
+            Err(poisoned) => {
+                // Mutex is poisoned, recover and apply rate limiting anyway
+                eprintln!("Warning: Rate limiting mutex was poisoned, recovering...");
+                let mut last_time = poisoned.into_inner();
+                if let Some(last) = *last_time {
+                    let elapsed = last.elapsed();
+                    let wait_duration = Duration::from_secs(API_CALL_DELAY_SECONDS);
+                    if elapsed < wait_duration {
+                        let sleep_duration = wait_duration - elapsed;
+                        thread::sleep(sleep_duration);
+                    }
+                }
+                *last_time = Some(Instant::now());
+            }
         }
         
         self.generate_content_with_retry(prompt, 0)
@@ -150,7 +163,8 @@ impl GeminiClient {
                     return self.generate_content_with_retry(prompt, attempt + 1);
                 } else {
                     // Couldn't parse error, use exponential backoff (capped at MAX_RETRY_DELAY_SECONDS)
-                    let retry_delay = (DEFAULT_RETRY_DELAY_SECONDS * (2_u64.pow(attempt)))
+                    let retry_delay = DEFAULT_RETRY_DELAY_SECONDS
+                        .saturating_mul(2_u64.saturating_pow(attempt))
                         .min(MAX_RETRY_DELAY_SECONDS);
                     eprintln!("Rate limit exceeded. Retrying in {} seconds... (attempt {}/{})", 
                         retry_delay, attempt + 1, MAX_RETRY_ATTEMPTS);
@@ -181,7 +195,9 @@ impl GeminiClient {
                         // Parse delay string like "17s" or "17.390968484s"
                         if let Some(seconds_str) = delay_str.strip_suffix('s') {
                             if let Ok(seconds) = seconds_str.parse::<f64>() {
-                                return Some(seconds.ceil() as u64);
+                                // Clamp to reasonable values and convert safely
+                                let clamped = seconds.max(0.0).min(MAX_RETRY_DELAY_SECONDS as f64);
+                                return Some(clamped.ceil() as u64);
                             }
                         }
                     }

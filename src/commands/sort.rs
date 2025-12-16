@@ -40,14 +40,16 @@ fn handle_ai_error(error: &anyhow::Error, file_name: &str) -> Result<UserChoice>
         "Abort entire operation",
     ];
     
-    let choice = Select::new("What would you like to do?", options)
+    let choice_idx = Select::new("What would you like to do?", options.clone())
         .prompt()
         .context("Failed to get user input")?;
     
-    match choice {
-        s if s.starts_with("Retry") => Ok(UserChoice::Retry),
-        s if s.starts_with("Skip") => Ok(UserChoice::Continue),
-        _ => Ok(UserChoice::Abort),
+    // Use exact string matching instead of starts_with for robustness
+    match choice_idx {
+        "Retry this file" => Ok(UserChoice::Retry),
+        "Skip this file and continue with remaining files" => Ok(UserChoice::Continue),
+        "Abort entire operation" => Ok(UserChoice::Abort),
+        _ => Ok(UserChoice::Abort), // Default to abort for safety
     }
 }
 

@@ -134,6 +134,7 @@ fn edit_search(cm: &mut ConfigManager) -> Result<()> {
             "Set Max Results",
             "Toggle Show Details",
             "Toggle Verbose Mode",
+            "Toggle Exclude Hidden",
             "Back"
         ];
         
@@ -145,6 +146,7 @@ fn edit_search(cm: &mut ConfigManager) -> Result<()> {
         println!("Max Results: {}", format!("{}", conf.max_results).cyan());
         println!("Show Details: {}", format!("{}", conf.show_details).cyan());
         println!("Verbose: {}", format!("{}", conf.verbose).cyan());
+        println!("Exclude Hidden: {}", format!("{}", conf.exclude_hidden).cyan());
 
         let selection = Select::new("Edit Search Option:", choices).prompt()?;
 
@@ -198,6 +200,9 @@ fn edit_search(cm: &mut ConfigManager) -> Result<()> {
             }
             "Toggle Verbose Mode" => {
                 conf.verbose = !conf.verbose;
+            }
+            "Toggle Exclude Hidden" => {
+                conf.exclude_hidden = !conf.exclude_hidden;
             }
             "Back" => break,
             _ => {}

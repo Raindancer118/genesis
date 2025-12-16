@@ -51,6 +51,7 @@ pub struct SearchConfig {
     pub max_results: usize,
     pub show_details: bool,
     pub verbose: bool,
+    pub exclude_hidden: bool,
 }
 
 impl Default for Config {
@@ -78,8 +79,8 @@ impl Default for Config {
                 use_git_init: true,
             },
             search: SearchConfig {
-                default_paths: vec![dirs::home_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
+                default_paths: vec![std::env::current_dir()
+                    .unwrap_or_else(|_| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
                     .to_string_lossy()
                     .to_string()],
                 ignore_patterns: vec![
@@ -88,11 +89,16 @@ impl Default for Config {
                     "target".to_string(),
                     ".cache".to_string(),
                     "__pycache__".to_string(),
+                    ".npm".to_string(),
+                    ".cargo".to_string(),
+                    "venv".to_string(),
+                    ".venv".to_string(),
                 ],
                 max_depth: 10,
                 max_results: 50,
                 show_details: false,
                 verbose: false,
+                exclude_hidden: true,
             },
         }
     }

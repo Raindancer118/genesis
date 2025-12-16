@@ -93,6 +93,7 @@ pub fn build_index(paths: Vec<PathBuf>, config: &ConfigManager) -> Result<()> {
     
     let ignore_patterns = &config.config.search.ignore_patterns;
     let max_depth = config.config.search.max_depth;
+    let exclude_hidden = config.config.search.exclude_hidden;
     
     for base_path in &paths {
         if !base_path.exists() {
@@ -107,7 +108,7 @@ pub fn build_index(paths: Vec<PathBuf>, config: &ConfigManager) -> Result<()> {
             .max_depth(max_depth)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|e| should_include(e, ignore_patterns));
+            .filter_entry(|e| should_include(e, ignore_patterns, exclude_hidden));
         
         for entry in walker {
             match entry {
@@ -138,15 +139,17 @@ pub fn build_index(paths: Vec<PathBuf>, config: &ConfigManager) -> Result<()> {
 }
 
 /// Check if a directory entry should be included based on ignore patterns
-fn should_include(entry: &walkdir::DirEntry, ignore_patterns: &[String]) -> bool {
+fn should_include(entry: &walkdir::DirEntry, ignore_patterns: &[String], exclude_hidden: bool) -> bool {
     let path = entry.path();
     let path_str = path.to_string_lossy();
     
-    // Skip hidden files/directories by default
-    if let Some(name) = path.file_name() {
-        let name_str = name.to_string_lossy();
-        if name_str.starts_with('.') && name_str != "." && name_str != ".." {
-            return false;
+    // Skip hidden files/directories if configured to do so
+    if exclude_hidden {
+        if let Some(name) = path.file_name() {
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with('.') && name_str != "." && name_str != ".." {
+                return false;
+            }
         }
     }
     
@@ -230,8 +233,8 @@ fn format_bytes(bytes: u64) -> String {
     }
     
     let size = bytes as f64;
-    let exp = (size.ln() / UNIT.ln()).floor() as i32;
-    let units = ["B", "KB", "MB", "GB", "TB"];
+    let exp = ((size.ln() / UNIT.ln()).floor() as i32).max(1).min(5);
+    let units = ["B", "KB", "MB", "GB", "TB", "PB"];
     let unit = units.get(exp as usize).unwrap_or(&"PB");
     
     format!("{:.1} {}", size / UNIT.powi(exp), unit)

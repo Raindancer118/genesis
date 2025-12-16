@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Deep Sorting Mode**: Content-based file analysis that reads file contents to determine categories intelligently
+  - Analyzes text files for code patterns, documentation structure, and data formats
+  - Uses AI (when available) for enhanced content understanding
+  - Falls back to heuristic analysis when AI is not configured
+  - Detects code indicators (functions, imports, classes) to categorize programming files
+  - Identifies documentation by markdown headers and structure
+  - Recognizes configuration files and data formats
+- **Custom Sort Destinations**: Configure where files go based on category
+  - Support for absolute paths (e.g., `/home/user/Documents`)
+  - Home directory expansion (`~/Documents`)
+  - Per-category destination mapping in config file
+  - Example: Documents go to `~/Documents/sorted`, Images to `~/Pictures`
+  - All sorting modes now respect custom destinations
+
+### Changed
+- All sorting modes now support custom destination configuration
+- Updated sorting mode count from 6 to 7 modes (added Deep mode)
+
 ## [2.0.0] - 2025-12-16
 ### Added
 - **Lightspeed Search**: Revolutionary file search with sub-millisecond performance using n-gram indexing and parallel fuzzy matching with SIMD acceleration.

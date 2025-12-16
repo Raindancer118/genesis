@@ -24,6 +24,11 @@ const HIGH_CONFIDENCE_THRESHOLD: f32 = 70.0;
 const AI_SORTING_MIN_CONFIDENCE: f32 = 50.0;
 const MIN_FILES_BEFORE_SMART_SWITCH: usize = 5;
 
+// Deep sorting constants
+const MAX_FILE_SAMPLE_SIZE: usize = 8192; // Maximum bytes to read from file for analysis
+const CONTENT_PREVIEW_SIZE: usize = 500; // Size of content preview to send to AI
+const MIN_CODE_INDICATORS: usize = 3; // Minimum number of code patterns to consider it code
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SortOperation {
     timestamp: DateTime<Utc>,
@@ -1346,14 +1351,14 @@ fn analyze_file_deeply(file_path: &Path, ai_client: Option<&GeminiClient>) -> Re
 
     // For text-based files, read content and analyze
     if is_text_file(&ext) {
-        if let Ok(content) = read_file_sample(file_path, 8192) {
+        if let Ok(content) = read_file_sample(file_path, MAX_FILE_SAMPLE_SIZE) {
             // Try AI analysis if available
             if let Some(client) = ai_client {
                 let file_name = file_path.file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "unknown".to_string());
                 
-                let metadata = format!("Content preview: {}", &content[..content.len().min(500)]);
+                let metadata = format!("Content preview: {}", &content[..content.len().min(CONTENT_PREVIEW_SIZE)]);
                 
                 if let Ok((category, confidence)) = client.suggest_category(&file_name, &ext, &metadata) {
                     if confidence >= 60.0 {
@@ -1449,7 +1454,7 @@ fn is_likely_code(content: &str, ext: &str) -> bool {
         .count();
     
     // If we find multiple code indicators or it's a known code extension, it's likely code
-    indicator_count >= 3 || matches!(
+    indicator_count >= MIN_CODE_INDICATORS || matches!(
         ext,
         "rs" | "py" | "js" | "ts" | "java" | "c" | "cpp" | "h" | "hpp" |
         "go" | "rb" | "php" | "cs" | "swift" | "kt" | "scala"

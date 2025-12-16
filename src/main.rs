@@ -3,6 +3,7 @@ use anyhow::Result;
 
 mod config;
 mod commands;
+mod ai;
 
 #[derive(Parser, Debug)]
 #[command(name = "genesis")]

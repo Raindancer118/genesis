@@ -1,11 +1,18 @@
 use anyhow::{Result, Context};
+use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::thread;
+use std::time::{Duration, Instant};
 
 const GEMINI_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent";
 const API_TIMEOUT_SECONDS: u64 = 30;
 const DEFAULT_CONFIDENCE: f32 = 50.0;
 const HIGH_CONFIDENCE_THRESHOLD: f32 = 70.0;
+const MAX_RETRY_ATTEMPTS: u32 = 3;
+const DEFAULT_RETRY_DELAY_SECONDS: u64 = 20;
+const MAX_RETRY_DELAY_SECONDS: u64 = 120;  // Cap exponential backoff at 2 minutes
+const API_CALL_DELAY_SECONDS: u64 = 4; // 15 RPM = 4 seconds per request
 
 #[derive(Debug, Serialize)]
 struct GeminiRequest {
@@ -42,9 +49,41 @@ struct PartResponse {
     text: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct GeminiErrorResponse {
+    error: GeminiError,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiError {
+    code: u16,
+    message: String,
+    status: Option<String>,
+    details: Option<Vec<ErrorDetail>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ErrorDetail {
+    #[serde(rename = "@type")]
+    error_type: String,
+    #[serde(rename = "retryDelay")]
+    retry_delay: Option<String>,
+    #[serde(rename = "violations")]
+    violations: Option<Vec<QuotaViolation>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QuotaViolation {
+    #[serde(rename = "quotaMetric")]
+    quota_metric: Option<String>,
+    #[serde(rename = "quotaId")]
+    quota_id: Option<String>,
+}
+
 pub struct GeminiClient {
     api_key: String,
     client: reqwest::blocking::Client,
+    last_call_time: std::sync::Mutex<Option<Instant>>,
 }
 
 impl GeminiClient {
@@ -56,7 +95,11 @@ impl GeminiClient {
             .timeout(std::time::Duration::from_secs(API_TIMEOUT_SECONDS))
             .build()?;
         
-        Ok(Self { api_key, client })
+        Ok(Self { 
+            api_key, 
+            client,
+            last_call_time: std::sync::Mutex::new(None),
+        })
     }
 
     pub fn is_available() -> bool {
@@ -64,6 +107,39 @@ impl GeminiClient {
     }
 
     pub fn generate_content(&self, prompt: &str) -> Result<String> {
+        // Rate limiting: wait 1 second between API calls
+        match self.last_call_time.lock() {
+            Ok(mut last_time) => {
+                if let Some(last) = *last_time {
+                    let elapsed = last.elapsed();
+                    let wait_duration = Duration::from_secs(API_CALL_DELAY_SECONDS);
+                    if elapsed < wait_duration {
+                        let sleep_duration = wait_duration - elapsed;
+                        thread::sleep(sleep_duration);
+                    }
+                }
+                *last_time = Some(Instant::now());
+            }
+            Err(poisoned) => {
+                // Mutex is poisoned, recover and apply rate limiting anyway
+                eprintln!("Warning: Rate limiting mutex was poisoned, recovering...");
+                let mut last_time = poisoned.into_inner();
+                if let Some(last) = *last_time {
+                    let elapsed = last.elapsed();
+                    let wait_duration = Duration::from_secs(API_CALL_DELAY_SECONDS);
+                    if elapsed < wait_duration {
+                        let sleep_duration = wait_duration - elapsed;
+                        thread::sleep(sleep_duration);
+                    }
+                }
+                *last_time = Some(Instant::now());
+            }
+        }
+        
+        self.generate_content_with_retry(prompt, 0)
+    }
+
+    fn generate_content_with_retry(&self, prompt: &str, attempt: u32) -> Result<String> {
         let request = GeminiRequest {
             contents: vec![Content {
                 parts: vec![Part {
@@ -83,6 +159,48 @@ impl GeminiClient {
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            
+            // Check if it's a rate limit error (429)
+            if status.as_u16() == 429 {
+                // Try to parse the error response to inspect details
+                if let Ok(error_response) = serde_json::from_str::<GeminiErrorResponse>(&error_text) {
+                    // Check for Daily Quota Exceeded first
+                    if Self::is_daily_quota_exceeded(&error_response) {
+                        anyhow::bail!("Gemini Daily Quota Exceeded. Please try again tomorrow or upgrade your plan.");
+                    }
+
+                    if attempt < MAX_RETRY_ATTEMPTS {
+                        let retry_delay = Self::extract_retry_delay(&error_response)
+                            .unwrap_or_else(|| {
+                                // Default exponential backoff if no delay provided or valid
+                                DEFAULT_RETRY_DELAY_SECONDS
+                                    .saturating_mul(2_u64.saturating_pow(attempt))
+                                    .min(MAX_RETRY_DELAY_SECONDS)
+                            });
+                        
+                        // Enforce a minimum delay if we are retrying, to avoid 0s loops
+                        let final_delay = retry_delay.max(5);
+
+                        eprintln!("{}", format!("Rate limit exceeded. Retrying in {} seconds... (attempt {}/{})", 
+                            final_delay, attempt + 1, MAX_RETRY_ATTEMPTS).yellow());
+                        
+                        thread::sleep(Duration::from_secs(final_delay));
+                        return self.generate_content_with_retry(prompt, attempt + 1);
+                    }
+                } else if attempt < MAX_RETRY_ATTEMPTS {
+                     // Couldn't parse error, use exponential backoff
+                     let retry_delay = DEFAULT_RETRY_DELAY_SECONDS
+                        .saturating_mul(2_u64.saturating_pow(attempt))
+                        .min(MAX_RETRY_DELAY_SECONDS);
+                        
+                     eprintln!("{}", format!("Rate limit exceeded. Retrying in {} seconds... (attempt {}/{})", 
+                        retry_delay, attempt + 1, MAX_RETRY_ATTEMPTS).yellow());
+                    
+                    thread::sleep(Duration::from_secs(retry_delay));
+                    return self.generate_content_with_retry(prompt, attempt + 1);
+                }
+            }
+            
             anyhow::bail!("Gemini API error ({}): {}", status, error_text);
         }
 
@@ -94,6 +212,45 @@ impl GeminiClient {
             .and_then(|c| c.content.parts.first())
             .map(|p| p.text.clone())
             .context("No response from Gemini API")
+    }
+
+    fn extract_retry_delay(error_response: &GeminiErrorResponse) -> Option<u64> {
+        if let Some(details) = &error_response.error.details {
+            for detail in details {
+                if detail.error_type == "type.googleapis.com/google.rpc.RetryInfo" {
+                    if let Some(delay_str) = &detail.retry_delay {
+                        // Parse delay string like "17s" or "17.390968484s"
+                        if let Some(seconds_str) = delay_str.strip_suffix('s') {
+                            if let Ok(seconds) = seconds_str.parse::<f64>() {
+                                // Clamp to reasonable values and convert safely
+                                let clamped = seconds.max(0.0).min(MAX_RETRY_DELAY_SECONDS as f64);
+                                return Some(clamped.ceil() as u64);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn is_daily_quota_exceeded(error_response: &GeminiErrorResponse) -> bool {
+         if let Some(details) = &error_response.error.details {
+            for detail in details {
+                if detail.error_type == "type.googleapis.com/google.rpc.QuotaFailure" {
+                    if let Some(violations) = &detail.violations {
+                        for violation in violations {
+                            if let Some(id) = &violation.quota_id {
+                                if id.contains("RequestsPerDay") {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Analyze a file and suggest a category

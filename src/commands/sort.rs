@@ -784,7 +784,7 @@ fn sort_ai_assisted_learning(target_dir: &Path, history: &mut SortHistory) -> Re
         Ok(client) => client,
         Err(e) => {
             println!("{}", format!("Error: Failed to initialize AI client: {}", e).red());
-            println!("{}", "Make sure GEMINI_API_KEY environment variable is set.".yellow());
+            println!("{}", "Make sure either the gemini CLI is installed or GEMINI_API_KEY environment variable is set.".yellow());
             return Ok(());
         }
     };
@@ -931,7 +931,7 @@ fn sort_ai_learning(target_dir: &Path, history: &mut SortHistory) -> Result<()> 
         Ok(client) => client,
         Err(e) => {
             println!("{}", format!("Error: Failed to initialize AI client: {}", e).red());
-            println!("{}", "Make sure GEMINI_API_KEY environment variable is set.".yellow());
+            println!("{}", "Make sure either the gemini CLI is installed or GEMINI_API_KEY environment variable is set.".yellow());
             return Ok(());
         }
     };
@@ -1189,7 +1189,7 @@ fn sort_ai_sorting(target_dir: &Path, history: &mut SortHistory) -> Result<()> {
         Ok(client) => client,
         Err(e) => {
             println!("{}", format!("Error: Failed to initialize AI client: {}", e).red());
-            println!("{}", "Make sure GEMINI_API_KEY environment variable is set.".yellow());
+            println!("{}", "Make sure either the gemini CLI is installed or GEMINI_API_KEY environment variable is set.".yellow());
             return Ok(());
         }
     };

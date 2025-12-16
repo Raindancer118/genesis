@@ -16,6 +16,8 @@ pub struct Config {
     pub project: ProjectConfig,
     #[serde(default)]
     pub search: SearchConfig,
+    #[serde(default)]
+    pub sort: SortConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -136,6 +138,22 @@ impl Default for SearchConfig {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct SortConfig {
+    pub enable_deep_sorting: bool,
+    pub custom_destinations: std::collections::HashMap<String, String>,
+}
+
+impl Default for SortConfig {
+    fn default() -> Self {
+        Self {
+            enable_deep_sorting: false,
+            custom_destinations: std::collections::HashMap::new(),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -144,6 +162,7 @@ impl Default for Config {
             hero: HeroConfig::default(),
             project: ProjectConfig::default(),
             search: SearchConfig::default(),
+            sort: SortConfig::default(),
         }
     }
 }

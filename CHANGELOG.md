@@ -11,6 +11,14 @@ All notable changes to this project will be documented in this file.
 - **Remove**: Universal package removal capable of detecting the correct manager.
 - **Monitor**: initial background monitoring stub.
 - **Self-Update**: Now displays this changelog during the update process.
+- **Benchmark**: Comprehensive system performance testing (CPU, Memory, Disk I/O) with ratings.
+- **Calculator**: Built-in calculator with support for basic operations, functions (sqrt, sin, cos, tan, abs, ln, log), and interactive mode.
+- **Environment**: Environment variable viewer with search, filtering, and export command examples.
+- **Logs**: System log viewer with filtering options for systemd journals, service logs, kernel logs, and authentication logs.
+- **Network**: Network diagnostics toolkit including ping, port scanning, DNS lookup, traceroute, and speed test integration.
+- **Notes**: Quick note-taking system with tagging, search, and full CRUD operations stored locally.
+- **Timer**: Productivity timer with countdown, stopwatch, and Pomodoro technique support.
+- **Todo**: Task management with priority levels, status tracking, and organized views.
 
 ## [0.1.0] - 2025-12-12
 ### Added

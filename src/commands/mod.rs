@@ -10,7 +10,11 @@ pub mod self_update;
 pub mod scan;
 pub mod monitor;
 pub mod health;
-// pub mod health; -- removed commented
-// pub mod project;
-// pub mod hero; -- removed commented
-// pub mod utils;
+pub mod benchmark;
+pub mod calc;
+pub mod env;
+pub mod logs;
+pub mod network;
+pub mod notes;
+pub mod timer;
+pub mod todo;

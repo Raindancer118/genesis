@@ -11,6 +11,7 @@ pub fn run(config_manager: &mut ConfigManager) -> Result<()> {
             "General Settings",
             "System Settings",
             "Project Settings",
+            "Search Settings",
             "Save & Exit",
             "Discard & Exit",
         ];
@@ -21,6 +22,7 @@ pub fn run(config_manager: &mut ConfigManager) -> Result<()> {
             "General Settings" => edit_general(config_manager)?,
             "System Settings" => edit_system(config_manager)?,
             "Project Settings" => edit_project(config_manager)?,
+            "Search Settings" => edit_search(config_manager)?,
             "Save & Exit" => {
                 config_manager.save()?;
                 println!("{}", "Configuration saved.".green());
@@ -118,5 +120,88 @@ fn edit_project(cm: &mut ConfigManager) -> Result<()> {
         .with_default(cm.config.project.use_git_init)
         .prompt()?;
 
+    Ok(())
+}
+
+fn edit_search(cm: &mut ConfigManager) -> Result<()> {
+    println!("\n{}", "--- Search Settings ---".bold());
+    
+    loop {
+        let choices = vec![
+            "Edit Default Paths",
+            "Edit Ignore Patterns",
+            "Set Max Depth",
+            "Set Max Results",
+            "Toggle Show Details",
+            "Toggle Verbose Mode",
+            "Back"
+        ];
+        
+        // Show current states
+        let conf = &mut cm.config.search;
+        println!("Default Paths: {}", conf.default_paths.join(", ").cyan());
+        println!("Ignore Patterns: {}", conf.ignore_patterns.join(", ").cyan());
+        println!("Max Depth: {}", format!("{}", conf.max_depth).cyan());
+        println!("Max Results: {}", format!("{}", conf.max_results).cyan());
+        println!("Show Details: {}", format!("{}", conf.show_details).cyan());
+        println!("Verbose: {}", format!("{}", conf.verbose).cyan());
+
+        let selection = Select::new("Edit Search Option:", choices).prompt()?;
+
+        match selection {
+            "Edit Default Paths" => {
+                let current = conf.default_paths.join(", ");
+                let new = Text::new("Default paths (comma separated):")
+                    .with_default(&current)
+                    .with_help_message("Paths to index when no path is specified")
+                    .prompt()?;
+                conf.default_paths = new.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+            "Edit Ignore Patterns" => {
+                let current = conf.ignore_patterns.join(", ");
+                let new = Text::new("Ignore patterns (comma separated):")
+                    .with_default(&current)
+                    .with_help_message("Patterns to exclude from indexing")
+                    .prompt()?;
+                conf.ignore_patterns = new.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+            "Set Max Depth" => {
+                let new = Text::new("Max directory depth:")
+                    .with_default(&conf.max_depth.to_string())
+                    .with_help_message("Maximum depth to traverse directories")
+                    .prompt()?;
+                if let Ok(depth) = new.parse::<usize>() {
+                    conf.max_depth = depth;
+                } else {
+                    println!("{}", "Invalid number, keeping current value.".yellow());
+                }
+            }
+            "Set Max Results" => {
+                let new = Text::new("Max search results:")
+                    .with_default(&conf.max_results.to_string())
+                    .with_help_message("Maximum number of results to display")
+                    .prompt()?;
+                if let Ok(results) = new.parse::<usize>() {
+                    conf.max_results = results;
+                } else {
+                    println!("{}", "Invalid number, keeping current value.".yellow());
+                }
+            }
+            "Toggle Show Details" => {
+                conf.show_details = !conf.show_details;
+            }
+            "Toggle Verbose Mode" => {
+                conf.verbose = !conf.verbose;
+            }
+            "Back" => break,
+            _ => {}
+        }
+    }
     Ok(())
 }

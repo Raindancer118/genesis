@@ -101,13 +101,16 @@ enum Commands {
     },
     /// Search files in the index
     Search { 
+        /// Query string to search for in file names and paths
         query: String 
     },
     /// Build file index for search
     Index {
+        /// Paths to index (uses default from config if not specified)
         #[arg(short, long)]
         paths: Vec<String>,
         
+        /// Display index information
         #[arg(short, long)]
         info: bool,
     },

@@ -121,7 +121,7 @@ genesis network
 
 #### 🤖 AI-Powered File Sorting
 
-Genesis now features **6 intelligent sorting modes** with optional Gemini AI integration:
+Genesis now features **7 intelligent sorting modes** with optional Gemini AI integration:
 
 ```bash
 # Sort files in current directory
@@ -131,9 +131,10 @@ genesis sort .
 # 1. Manual Learning - You categorize, system learns silently
 # 2. Assisted Learning - System suggests, you correct
 # 3. Smart - Uses your learned patterns automatically
-# 4. AI-Assisted Learning - System suggests, AI corrects/validates 🤖
-# 5. AI Learning - AI suggests, you teach ⚡
-# 6. AI Sorting - Fully automatic AI categorization 🚀
+# 4. Deep - Content-based analysis with AI/heuristics 🔍
+# 5. AI-Assisted Learning - System suggests, AI corrects/validates 🤖
+# 6. AI Learning - AI suggests, you teach ⚡
+# 7. AI Sorting - Fully automatic AI categorization 🚀
 ```
 
 **AI Features:**
@@ -143,6 +144,28 @@ genesis sort .
 - 💬 AI explains corrections when disagreeing with system
 - 🔄 Switch from AI Learning to smart mode mid-session
 - 📚 AI validates system suggestions in AI-Assisted Learning
+
+**Deep Sorting Mode:**
+- 🔍 Analyzes file contents to understand what they are
+- 📝 Detects code patterns, documentation structure, and data formats
+- 🤖 Uses AI (when available) for enhanced content analysis
+- 🎯 Falls back to heuristic analysis when AI is not configured
+
+**Custom Destinations:**
+- 📂 Configure where files go based on category
+- 🏠 Support for absolute paths (e.g., `/home/user/Documents`) and home directory expansion (`~/Documents`)
+- ⚙️ Configure in `~/.config/genesis/config.toml` under `[sort.custom_destinations]`
+
+Example configuration:
+```toml
+[sort]
+enable_deep_sorting = false
+
+[sort.custom_destinations]
+Documents = "~/Documents/sorted"
+Images = "~/Pictures"
+Code = "~/Projects"
+```
 
 ### 📝 Productivity Tools
 
@@ -320,18 +343,19 @@ ignore_patterns = [
 | `genesis hero` | Kill resource-intensive processes |
 | `genesis health` | System health check |
 | `genesis new <name>` | Create new project |
-| `genesis sort <path>` | Organize files with 5 intelligent modes |
+| `genesis sort <path>` | Organize files with 7 intelligent modes |
 | `genesis setup` | Interactive configuration (includes Gemini API) |
 
 ### File Sorting Modes
 
-Genesis provides **6 intelligent sorting modes**:
+Genesis provides **7 intelligent sorting modes**:
 
 | Mode | Description | Learning | AI Required |
 |------|-------------|----------|-------------|
 | **Manual Learning** | You categorize each file manually | ✅ System learns | ❌ No |
 | **Assisted Learning** | System suggests based on rules, you correct | ✅ System learns | ❌ No |
 | **Smart** | Automatically uses your learned patterns | Uses learned data | ❌ No |
+| **Deep** | Content-based analysis (AI + heuristics) | Analyzes content | 🔶 Optional |
 | **AI-Assisted Learning** | System suggests, AI validates/corrects | ✅ AI corrects | ✅ Yes |
 | **AI Learning** | AI suggests, you teach and correct | ✅ Both learn | ✅ Yes |
 | **AI Sorting** | Fully automatic AI categorization | AI categorizes | ✅ Yes |
@@ -343,6 +367,8 @@ Genesis provides **6 intelligent sorting modes**:
 - 🤖 AI validates system suggestions in AI-Assisted Learning mode
 - 🧠 Persistent learning across sessions
 - ↩️ Undo last operation within 5 minutes
+- 🔍 Deep mode analyzes file contents for better categorization
+- 📂 Custom destinations for each category (configure in config.toml)
 
 See `genesis --help` for the complete command list.
 

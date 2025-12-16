@@ -8,6 +8,9 @@ use walkdir::WalkDir;
 use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
 
+mod lightspeed;
+use lightspeed::{LightspeedIndex, LightspeedEntry};
+
 /// Represents a single indexed file entry
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileEntry {
@@ -84,6 +87,20 @@ pub fn get_index_path() -> PathBuf {
     config_dir.join("file_index.json")
 }
 
+/// Get the path where the lightspeed index file is stored
+pub fn get_lightspeed_index_path() -> PathBuf {
+    let config_dir = if let Some(proj_dirs) = ProjectDirs::from("", "", "genesis") {
+        proj_dirs.data_dir().to_path_buf()
+    } else {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".local")
+            .join("share")
+            .join("genesis")
+    };
+    config_dir.join("lightspeed_index.json")
+}
+
 /// Build or rebuild the file index
 pub fn build_index(paths: Vec<PathBuf>, config: &ConfigManager) -> Result<()> {
     println!("{}", "🔍 Building file index...".bold().cyan());
@@ -135,6 +152,61 @@ pub fn build_index(paths: Vec<PathBuf>, config: &ConfigManager) -> Result<()> {
     println!("{}", format!("✅ Indexed {} files", index.entries.len()).bold().green());
     println!("Index saved to: {}", index_path.display());
     
+    // Build lightspeed index if enabled
+    if config.config.search.lightspeed_mode {
+        build_lightspeed_from_basic(&index, config)?;
+    }
+    
+    Ok(())
+}
+
+/// Build lightspeed index from basic index
+fn build_lightspeed_from_basic(basic_index: &FileIndex, config: &ConfigManager) -> Result<()> {
+    println!("{}", "⚡ Building Lightspeed index...".bold().yellow());
+    
+    let lightspeed_path = get_lightspeed_index_path();
+    let mut ls_index = LightspeedIndex::new();
+    
+    // Convert entries
+    ls_index.entries = basic_index.entries.iter().enumerate().map(|(idx, entry)| {
+        LightspeedEntry {
+            id: idx,
+            path: entry.path.clone(),
+            name: entry.name.clone(),
+            name_lower: entry.name.to_lowercase(),
+            size: entry.size,
+            modified: entry.modified,
+        }
+    }).collect();
+    
+    ls_index.indexed_paths = basic_index.indexed_paths.clone();
+    ls_index.last_updated = basic_index.last_updated;
+    
+    // Build n-gram index for O(k) substring search
+    println!("Building n-gram index for substring search...");
+    ls_index.build_ngram_index(3);
+    
+    // Build deletion index for SymSpell fuzzy search  
+    let fuzzy_distance = config.config.search.fuzzy_threshold;
+    if fuzzy_distance > 0 {
+        println!("Building deletion index for fuzzy search (edit distance: {})...", fuzzy_distance);
+        ls_index.build_deletion_index(fuzzy_distance);
+    }
+    
+    // Save lightspeed index
+    if let Some(parent) = lightspeed_path.parent() {
+        fs::create_dir_all(parent).context("Failed to create index directory")?;
+    }
+    
+    let content = serde_json::to_string(&ls_index)
+        .context("Failed to serialize lightspeed index")?;
+    fs::write(&lightspeed_path, content)
+        .context("Failed to write lightspeed index file")?;
+    
+    println!("{}", "✅ Lightspeed index built!".bold().green());
+    println!("   N-gram entries: {}", ls_index.ngram_index.len());
+    println!("   Deletion entries: {}", ls_index.deletion_index.len());
+    
     Ok(())
 }
 
@@ -179,6 +251,18 @@ fn create_file_entry(entry: &walkdir::DirEntry) -> Option<FileEntry> {
 
 /// Search the index for files matching the query
 pub fn search(query: String, config: &ConfigManager) -> Result<()> {
+    // Try lightspeed mode first if enabled
+    if config.config.search.lightspeed_mode {
+        let lightspeed_path = get_lightspeed_index_path();
+        if lightspeed_path.exists() {
+            return search_lightspeed(query, config);
+        } else {
+            println!("{}", "⚠️  Lightspeed index not found. Falling back to standard search.".yellow());
+            println!("{}", "   Run 'genesis index' to build the lightspeed index.".dimmed());
+        }
+    }
+    
+    // Fallback to standard search
     let index_path = get_index_path();
     
     if !index_path.exists() {
@@ -259,6 +343,79 @@ pub fn info() -> Result<()> {
     for path in &index.indexed_paths {
         println!("  - {}", path.display());
     }
+    
+    // Show lightspeed info if available
+    let lightspeed_path = get_lightspeed_index_path();
+    if lightspeed_path.exists() {
+        if let Ok(content) = fs::read_to_string(&lightspeed_path) {
+            if let Ok(ls_index) = serde_json::from_str::<LightspeedIndex>(&content) {
+                println!("\n{}", "⚡ Lightspeed Index".bold().yellow());
+                println!("Location: {}", lightspeed_path.display());
+                println!("N-gram index size: {} entries", ls_index.ngram_index.len());
+                println!("Deletion index size: {} entries", ls_index.deletion_index.len());
+            }
+        }
+    }
+    
+    Ok(())
+}
+
+/// Search using lightspeed mode with advanced algorithms
+fn search_lightspeed(query: String, config: &ConfigManager) -> Result<()> {
+    let lightspeed_path = get_lightspeed_index_path();
+    
+    let content = fs::read_to_string(&lightspeed_path)
+        .context("Failed to read lightspeed index")?;
+    let ls_index: LightspeedIndex = serde_json::from_str(&content)
+        .context("Failed to parse lightspeed index")?;
+    
+    println!("{}", format!("⚡ Lightspeed search for '{}'...", query).bold().yellow());
+    
+    // Use hybrid search with fuzzy matching
+    let fuzzy_threshold = 30; // Minimum score for fuzzy matches
+    let use_fuzzy = true; // Enable fuzzy matching for better results
+    
+    let start = std::time::Instant::now();
+    let results = ls_index.search_hybrid(&query, use_fuzzy, fuzzy_threshold);
+    let elapsed = start.elapsed();
+    
+    if results.is_empty() {
+        println!("{}", "No results found.".yellow());
+        return Ok(());
+    }
+    
+    println!("\n{} results found in {:.2}ms:\n", results.len(), elapsed.as_secs_f64() * 1000.0);
+    
+    let max_results = config.config.search.max_results;
+    for (i, (idx, score)) in results.iter().take(max_results).enumerate() {
+        let entry = &ls_index.entries[*idx];
+        
+        // Show match quality indicator
+        let quality = if *score > 80 { "✓✓✓" } else if *score > 50 { "✓✓" } else { "✓" };
+        
+        println!("{} {} {}", 
+            format!("{}.", i + 1).bold(),
+            entry.path.display().to_string().cyan(),
+            format!("[{}]", quality).dimmed()
+        );
+        
+        if config.config.search.show_details {
+            println!("   Size: {} | Modified: {} | Score: {}", 
+                format_bytes(entry.size),
+                entry.modified.format("%Y-%m-%d %H:%M:%S"),
+                score
+            );
+        }
+    }
+    
+    if results.len() > max_results {
+        println!("\n{}", format!("... and {} more results (use config to increase max_results)", 
+            results.len() - max_results).dimmed());
+    }
+    
+    println!("\n{}", format!("Index last updated: {} | Search time: {:.2}ms", 
+        ls_index.last_updated.format("%Y-%m-%d %H:%M:%S"),
+        elapsed.as_secs_f64() * 1000.0).dimmed());
     
     Ok(())
 }

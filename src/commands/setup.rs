@@ -132,9 +132,11 @@ fn edit_search(cm: &mut ConfigManager) -> Result<()> {
             "Edit Ignore Patterns",
             "Set Max Depth",
             "Set Max Results",
+            "Set Fuzzy Threshold",
             "Toggle Show Details",
             "Toggle Verbose Mode",
             "Toggle Exclude Hidden",
+            "Toggle Lightspeed Mode",
             "Back"
         ];
         
@@ -144,9 +146,14 @@ fn edit_search(cm: &mut ConfigManager) -> Result<()> {
         println!("Ignore Patterns: {}", conf.ignore_patterns.join(", ").cyan());
         println!("Max Depth: {}", format!("{}", conf.max_depth).cyan());
         println!("Max Results: {}", format!("{}", conf.max_results).cyan());
+        println!("Fuzzy Threshold: {}", format!("{}", conf.fuzzy_threshold).cyan());
         println!("Show Details: {}", format!("{}", conf.show_details).cyan());
         println!("Verbose: {}", format!("{}", conf.verbose).cyan());
         println!("Exclude Hidden: {}", format!("{}", conf.exclude_hidden).cyan());
+        println!("Lightspeed Mode: {} {}", 
+            format!("{}", conf.lightspeed_mode).cyan(),
+            if conf.lightspeed_mode { "⚡" } else { "" }
+        );
 
         let selection = Select::new("Edit Search Option:", choices).prompt()?;
 
@@ -195,6 +202,21 @@ fn edit_search(cm: &mut ConfigManager) -> Result<()> {
                     println!("{}", "Invalid number, keeping current value.".yellow());
                 }
             }
+            "Set Fuzzy Threshold" => {
+                let new = Text::new("Fuzzy search edit distance:")
+                    .with_default(&conf.fuzzy_threshold.to_string())
+                    .with_help_message("Maximum edit distance for fuzzy matching (0-3)")
+                    .prompt()?;
+                if let Ok(threshold) = new.parse::<usize>() {
+                    if threshold <= 3 {
+                        conf.fuzzy_threshold = threshold;
+                    } else {
+                        println!("{}", "Value must be 0-3, keeping current value.".yellow());
+                    }
+                } else {
+                    println!("{}", "Invalid number, keeping current value.".yellow());
+                }
+            }
             "Toggle Show Details" => {
                 conf.show_details = !conf.show_details;
             }
@@ -203,6 +225,14 @@ fn edit_search(cm: &mut ConfigManager) -> Result<()> {
             }
             "Toggle Exclude Hidden" => {
                 conf.exclude_hidden = !conf.exclude_hidden;
+            }
+            "Toggle Lightspeed Mode" => {
+                conf.lightspeed_mode = !conf.lightspeed_mode;
+                if conf.lightspeed_mode {
+                    println!("{}", "⚡ Lightspeed mode enabled! Rebuild index to activate.".green());
+                } else {
+                    println!("{}", "Standard search mode enabled.".yellow());
+                }
             }
             "Back" => break,
             _ => {}

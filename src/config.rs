@@ -52,6 +52,8 @@ pub struct SearchConfig {
     pub show_details: bool,
     pub verbose: bool,
     pub exclude_hidden: bool,
+    pub lightspeed_mode: bool,
+    pub fuzzy_threshold: usize,
 }
 
 impl Default for Config {
@@ -99,6 +101,8 @@ impl Default for Config {
                 show_details: false,
                 verbose: false,
                 exclude_hidden: true,
+                lightspeed_mode: true,
+                fuzzy_threshold: 2,
             },
         }
     }

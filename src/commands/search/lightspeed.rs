@@ -55,12 +55,13 @@ impl LightspeedIndex {
         for (idx, entry) in self.entries.iter().enumerate() {
             let text = &entry.name_lower;
             
-            // Generate all n-grams
-            for i in 0..text.len() {
-                for j in i+1..=text.len().min(i + n + 2) {
-                    let ngram = &text[i..j];
+            // Generate all n-grams using character-level indexing to handle UTF-8
+            let chars: Vec<char> = text.chars().collect();
+            for i in 0..chars.len() {
+                for j in i+1..=chars.len().min(i + n + 2) {
+                    let ngram: String = chars[i..j].iter().collect();
                     self.ngram_index
-                        .entry(ngram.to_string())
+                        .entry(ngram)
                         .or_insert_with(Vec::new)
                         .push(idx);
                 }
@@ -68,11 +69,12 @@ impl LightspeedIndex {
             
             // Also index the full path for path-based searches
             let path_str = entry.path.to_string_lossy().to_lowercase();
-            for i in 0..path_str.len() {
-                for j in i+1..=path_str.len().min(i + n + 2) {
-                    let ngram = &path_str[i..j];
+            let path_chars: Vec<char> = path_str.chars().collect();
+            for i in 0..path_chars.len() {
+                for j in i+1..=path_chars.len().min(i + n + 2) {
+                    let ngram: String = path_chars[i..j].iter().collect();
                     self.ngram_index
-                        .entry(ngram.to_string())
+                        .entry(ngram)
                         .or_insert_with(Vec::new)
                         .push(idx);
                 }
@@ -270,5 +272,34 @@ mod tests {
         assert!(deletions.contains(&"est".to_string()));
         assert!(deletions.contains(&"tst".to_string()));
         assert!(deletions.contains(&"tes".to_string()));
+    }
+
+    #[test]
+    fn test_ngram_index_with_multibyte_utf8() {
+        // Test case for the issue with "geschäftsbrief 1.tmvx"
+        let mut index = LightspeedIndex::new();
+        index.entries.push(LightspeedEntry {
+            id: 0,
+            path: PathBuf::from("/test/geschäftsbrief 1.tmvx"),
+            name: "geschäftsbrief 1.tmvx".to_string(),
+            name_lower: "geschäftsbrief 1.tmvx".to_string(),
+            size: 1024,
+            modified: Utc::now(),
+        });
+        
+        // This should not panic when building n-gram index
+        index.build_ngram_index(3);
+        
+        // Verify we can search for the file
+        let results = index.search_substring("geschäft");
+        assert_eq!(results.len(), 1);
+        
+        // Search with the umlaut character
+        let results = index.search_substring("äft");
+        assert_eq!(results.len(), 1);
+        
+        // Search for part of the file
+        let results = index.search_substring("brief");
+        assert_eq!(results.len(), 1);
     }
 }

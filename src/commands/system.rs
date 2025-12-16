@@ -436,7 +436,6 @@ pub fn update_revamped(yes: bool, only: Option<String>, verbose: bool, _config: 
     if which("cargo").is_ok() && should_run!("cargo") {
         // Try cargo install-update (requires cargo-update crate to be installed)
         // We just attempt to run it; if it fails, it's no big deal
-        updated_count += 1;
         println!("{}", "┌─ Language - Cargo".bold().magenta());
         println!("{}", "│  Command: cargo install-update -a".dimmed());
         let mut cmd = Command::new("cargo");
@@ -448,10 +447,10 @@ pub fn update_revamped(yes: bool, only: Option<String>, verbose: bool, _config: 
         match cmd.status() {
             Ok(status) if status.success() => {
                 println!("{}", format!("└─ {} Success\n", "✓".green()).green());
+                updated_count += 1;
             }
             Ok(_) | Err(_) => {
                 println!("{}", format!("└─ {} Skipped (cargo-update not installed)\n", "⊘".yellow()).yellow());
-                updated_count -= 1;
                 skipped_count += 1;
             }
         }

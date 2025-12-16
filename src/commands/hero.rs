@@ -68,17 +68,31 @@ pub fn run_revamped(
 
     // Collect target processes
     let mut targets = Vec::new();
+    
+    // Get current user for filtering (best effort)
+    let current_uid_opt = if scope == "user" {
+        // Try to get a process owned by us to compare UIDs
+        sys.processes().iter()
+            .find(|(_, p)| {
+                // Try to find a process we own (like this process or shell)
+                let name = p.name().to_string_lossy();
+                name.contains("genesis") || name.contains("bash") || name.contains("sh")
+            })
+            .and_then(|(_, p)| p.user_id())
+            .map(|uid| uid.clone())
+    } else {
+        None
+    };
 
     for (pid, process) in sys.processes() {
-        // Filter by scope
-        if scope == "user" {
-            // For simplicity, we'll skip the detailed user filtering
-            // sysinfo 0.33 doesn't have get_user_by_id as a public method
-            // We'll just match by comparing process user_id with current user's processes
-            // A better approach would require the 'users' crate, but we'll keep it simple
-            if let Some(_uid) = process.user_id() {
-                // We could filter more precisely here with the users crate
-                // For now, we'll just continue - scope filtering is best-effort
+        // Filter by scope if user mode is enabled
+        if let Some(ref current_uid) = current_uid_opt {
+            if let Some(proc_uid) = process.user_id() {
+                if proc_uid != current_uid {
+                    continue; // Skip processes not owned by current user
+                }
+            } else {
+                continue; // Skip processes without user info
             }
         }
 

@@ -107,7 +107,7 @@ impl GeminiClient {
     }
 
     pub fn generate_content(&self, prompt: &str) -> Result<String> {
-        // Rate limiting: wait 1 second between API calls
+        // Rate limiting: wait between API calls
         match self.last_call_time.lock() {
             Ok(mut last_time) => {
                 if let Some(last) = *last_time {

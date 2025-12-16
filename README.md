@@ -121,7 +121,7 @@ genesis network
 
 #### 🤖 AI-Powered File Sorting
 
-Genesis now features **5 intelligent sorting modes** with optional Gemini AI integration:
+Genesis now features **6 intelligent sorting modes** with optional Gemini AI integration:
 
 ```bash
 # Sort files in current directory
@@ -131,17 +131,18 @@ genesis sort .
 # 1. Manual Learning - You categorize, system learns silently
 # 2. Assisted Learning - System suggests, you correct
 # 3. Smart - Uses your learned patterns automatically
-# 4. AI-Assisted Learning - AI suggests, you teach (requires API key) ⚡
-# 5. AI Sorting - Fully automatic AI categorization (requires API key) 🤖
+# 4. AI-Assisted Learning - System suggests, AI corrects/validates 🤖
+# 5. AI Learning - AI suggests, you teach ⚡
+# 6. AI Sorting - Fully automatic AI categorization 🚀
 ```
 
 **AI Features:**
 - 🎯 Intelligent categorization using Gemini 2.0 Flash
 - 📸 Automatic screenshot detection
-- 🧠 Learns from your corrections
-- 💬 Asks when unsure (assisted learning mode)
-- 🔄 Switch from assisted to smart mode mid-session
-- 📚 Explains why files should be in certain categories
+- 🧠 Learns from your corrections and AI validations
+- 💬 AI explains corrections when disagreeing with system
+- 🔄 Switch from AI Learning to smart mode mid-session
+- 📚 AI validates system suggestions in AI-Assisted Learning
 
 ### 📝 Productivity Tools
 
@@ -324,20 +325,22 @@ ignore_patterns = [
 
 ### File Sorting Modes
 
-Genesis provides **5 intelligent sorting modes**:
+Genesis provides **6 intelligent sorting modes**:
 
 | Mode | Description | Learning | AI Required |
 |------|-------------|----------|-------------|
 | **Manual Learning** | You categorize each file manually | ✅ System learns | ❌ No |
 | **Assisted Learning** | System suggests based on rules, you correct | ✅ System learns | ❌ No |
 | **Smart** | Automatically uses your learned patterns | Uses learned data | ❌ No |
-| **AI-Assisted Learning** | AI suggests, you teach, both learn | ✅ Both learn | ✅ Yes |
+| **AI-Assisted Learning** | System suggests, AI validates/corrects | ✅ AI corrects | ✅ Yes |
+| **AI Learning** | AI suggests, you teach and correct | ✅ Both learn | ✅ Yes |
 | **AI Sorting** | Fully automatic AI categorization | AI categorizes | ✅ Yes |
 
 **Additional features:**
 - 📸 Automatic screenshot detection (detects 16:9, 16:10, 21:9 aspect ratios)
-- 🔄 Switch from AI-assisted to smart mode mid-session
-- 💬 AI explains why corrections matter
+- 🔄 Switch from AI Learning to smart mode mid-session
+- 💬 AI explains corrections when disagreeing with system
+- 🤖 AI validates system suggestions in AI-Assisted Learning mode
 - 🧠 Persistent learning across sessions
 - ↩️ Undo last operation within 5 minutes
 

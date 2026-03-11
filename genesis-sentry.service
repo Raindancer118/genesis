@@ -1,6 +1,0 @@
-[Unit]
-Description=Genesis Sentry background health check
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/genesis monitor

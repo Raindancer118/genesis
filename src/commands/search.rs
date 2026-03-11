@@ -9,8 +9,6 @@ use walkdir::WalkDir;
 use directories::ProjectDirs;
 use chrono::Utc;
 
-mod lightspeed;
-
 fn get_db_path() -> PathBuf {
     if let Some(proj_dirs) = ProjectDirs::from("", "volantic", "genesis") {
         proj_dirs.data_dir().join("search.db")

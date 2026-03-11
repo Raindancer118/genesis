@@ -1,0 +1,9 @@
+[Unit]
+Description=Volantic Genesis startup greeting
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vg greet
+
+[Install]
+WantedBy=default.target

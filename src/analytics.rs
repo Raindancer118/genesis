@@ -10,6 +10,7 @@ const PING_INTERVAL_SECS: u64 = 86400; // 24 hours
 
 #[derive(Serialize)]
 struct PingPayload {
+    tool: String,
     client_id: String,
     version: String,
     os: String,
@@ -19,6 +20,7 @@ struct PingPayload {
 
 #[derive(Serialize)]
 struct EventPayload {
+    tool: String,
     client_id: String,
     event: String,
     command: String,
@@ -88,6 +90,7 @@ pub fn maybe_ping(config: &ConfigManager) {
     // Spawn background thread — doesn't block CLI
     std::thread::spawn(move || {
         let payload = PingPayload {
+            tool: "volantic-genesis".to_string(),
             client_id,
             version,
             os,
@@ -123,6 +126,7 @@ pub fn track_command(config: &ConfigManager, command: &str) {
 
     std::thread::spawn(move || {
         let payload = EventPayload {
+            tool: "volantic-genesis".to_string(),
             client_id,
             event: "command".to_string(),
             command,

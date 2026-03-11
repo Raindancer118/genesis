@@ -135,39 +135,60 @@ jobs:
           version = os.environ.get('GITHUB_REF_NAME', 'latest')
           token   = os.environ['GITHUB_TOKEN']
 
-          # Collect commits since previous tag (or last 20 if first release)
+          # Full commit log (subject + body) since previous tag
+          log_format = '---commit---\n%s\n%b'
           try:
               prev = subprocess.check_output(
                   ['git', 'describe', '--tags', '--abbrev=0', 'HEAD^'],
                   stderr=subprocess.DEVNULL, text=True
               ).strip()
               commits = subprocess.check_output(
-                  ['git', 'log', f'{prev}..HEAD', '--pretty=format:- %s'],
+                  ['git', 'log', f'{prev}..HEAD', f'--pretty=format:{log_format}'],
                   text=True
               ).strip()
           except Exception:
               commits = subprocess.check_output(
-                  ['git', 'log', '--pretty=format:- %s', '-20'],
+                  ['git', 'log', f'--pretty=format:{log_format}', '-30'],
                   text=True
               ).strip()
 
-          prompt = f"""Write concise, polished release notes for **Volantic Genesis {version}**.
+          prompt = f"""You are writing the official release notes for **Volantic Genesis {version}**, a fast system CLI tool for Linux (and Windows) that wraps package managers (pamac, yay, pacman, apt, flatpak, cargo, npm, pipx, brew), provides a lightning-fast indexed file search, and includes system info, health checks, and self-update functionality.
 
-          Commits included in this release:
-          {commits[:2000]}
+The audience is a mix of end users (who care what changed for them) and technical users (who want to know *why* and *how* things changed under the hood).
 
-          Format as GitHub-flavoured Markdown:
-          - Start with a 1–2 sentence summary of what this release brings.
-          - Then group changes under headers using these emojis where applicable:
-            ✨ Features, 🔧 Fixes, 🚀 Improvements, 🏗️ Internals
-          - Keep bullet points brief and user-focused.
-          - Do NOT include the version number or a top-level heading — just the body."""
+Here are the raw git commits included in this release:
+
+{commits[:4000]}
+
+Write detailed, well-structured release notes in GitHub-flavoured Markdown. Follow these rules exactly:
+
+1. Start with a **2–3 sentence highlight paragraph** — what is the most important thing about this release? What should users be excited about?
+
+2. Then use the following sections **only if there are relevant changes** — skip empty sections entirely:
+
+### ✨ New Features
+List each new feature with a short title in bold, then 1–2 sentences explaining what it does and why it's useful to the user.
+
+### 🔧 Bug Fixes
+For each fix: bold title, then explain what was broken, what the symptom was, and how it's now resolved.
+
+### 🚀 Improvements
+UX improvements, performance wins, better output — explain the before/after from the user's perspective.
+
+### 🏗️ Under the Hood
+Technical changes: architecture, dependencies, CI/CD, internals. Explain briefly what changed and why, for developers following the project.
+
+Rules:
+- Be specific — mention actual component names (e.g. "self-update", "vg update", "pamac", "FTS5 index").
+- Do NOT pad with filler. If a section has nothing worth mentioning, omit it.
+- Do NOT include the version number or a top-level `#` heading — the release title is added separately.
+- Bullet points within sections are fine for listing multiple items."""
 
           payload = json.dumps({
-              "model": "gpt-4o-mini",
+              "model": "gpt-4o",
               "messages": [{"role": "user", "content": prompt}],
-              "max_tokens": 600,
-              "temperature": 0.4,
+              "max_tokens": 1200,
+              "temperature": 0.3,
           }).encode()
 
           req = urllib.request.Request(

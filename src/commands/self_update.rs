@@ -67,6 +67,30 @@ fn version_is_newer(latest: &str, current: &str) -> bool {
     parse(latest) > parse(current)
 }
 
+/// Try to atomically replace `dst` with `src` using rename().
+/// Falls back to: copy `src` next to `dst`, then rename (handles cross-device moves).
+/// Returns true on success, false if we need elevated privileges.
+fn replace_binary(src: &std::path::Path, dst: &std::path::Path) -> bool {
+    // Direct rename — works when src and dst are on the same filesystem.
+    if fs::rename(src, dst).is_ok() {
+        return true;
+    }
+    // Cross-device: stage a copy adjacent to the destination, then rename.
+    let Some(parent) = dst.parent() else { return false };
+    let staged = parent.join(".vg-update-staged");
+    if fs::copy(src, &staged).is_err() {
+        return false;
+    }
+    #[cfg(unix)]
+    let _ = fs::set_permissions(&staged, fs::Permissions::from_mode(0o755));
+    if fs::rename(&staged, dst).is_ok() {
+        return true;
+    }
+    // Staged rename failed — clean up and signal that sudo is needed.
+    let _ = fs::remove_file(&staged);
+    false
+}
+
 pub fn run() -> Result<()> {
     ui::print_header("SELF UPDATE");
 
@@ -157,22 +181,23 @@ pub fn run() -> Result<()> {
     fs::set_permissions(&new_bin, fs::Permissions::from_mode(0o755))
         .context("Failed to set permissions")?;
 
-    // On Linux a running binary is locked (ETXTBSY) — remove it first, then copy.
-    // Try without sudo first, fall back to sudo for both steps.
     let exe_str = exe_path.to_str().unwrap();
     let new_str = new_bin.to_str().unwrap();
 
-    // Try without sudo first; if permission denied, fall back to sudo.
-    // (permissions().readonly() doesn't reflect actual user access — just try it.)
-    if fs::remove_file(&exe_path).is_ok() {
-        fs::copy(&new_bin, &exe_path).context("Failed to copy new binary")?;
-    } else {
+    // Strategy: rename() atomically swaps the directory entry — it never writes to the
+    // existing inode, so ETXTBSY cannot occur even on a running binary.
+    // If rename fails (cross-device move), copy into the same directory first, then rename.
+    // Only if we genuinely lack permission fall back to `sudo install`.
+    if !replace_binary(&new_bin, &exe_path) {
         ui::skip("Needs elevated privileges to replace binary...");
-        let rm = std::process::Command::new("sudo").args(["rm", "-f", exe_str]).status()?;
-        if !rm.success() { return Err(anyhow!("Failed to remove old binary")); }
-        let cp = std::process::Command::new("sudo").args(["cp", new_str, exe_str]).status()?;
-        if !cp.success() { return Err(anyhow!("Failed to copy new binary")); }
-        std::process::Command::new("sudo").args(["chmod", "+x", exe_str]).status()?;
+        // `sudo install` creates a new file at the destination (no in-place write) — avoids ETXTBSY.
+        let status = std::process::Command::new("sudo")
+            .args(["install", "-m", "755", new_str, exe_str])
+            .status()
+            .context("Failed to run sudo install")?;
+        if !status.success() {
+            return Err(anyhow!("Failed to install new binary"));
+        }
     }
 
     println!();

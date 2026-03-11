@@ -108,8 +108,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      models: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -121,38 +124,103 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
 
-      - name: Build release notes
+      - name: Generate AI release notes
+        id: notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [[ -f CHANGELOG.md ]]; then
-            awk '/^## \[/{if(found) exit; found=1; next} found{print}' CHANGELOG.md | head -30 > release_notes.md
-          else
-            echo "See commits for changes." > release_notes.md
-          fi
+          python3 << 'PYEOF'
+          import subprocess, json, urllib.request, os, sys
 
-          echo "" >> release_notes.md
-          echo "## Downloads" >> release_notes.md
-          echo "" >> release_notes.md
-          echo "| Platform | File |" >> release_notes.md
-          echo "|---|---|" >> release_notes.md
-          echo "| Linux x86_64 | \`vg-x86_64-linux.tar.gz\` |" >> release_notes.md
-          echo "| Linux ARM64  | \`vg-aarch64-linux.tar.gz\` |" >> release_notes.md
-          echo "| Windows x64  | \`vg-x86_64-windows.zip\` |" >> release_notes.md
-          echo "" >> release_notes.md
-          echo "**Linux / macOS:**" >> release_notes.md
-          echo '```bash' >> release_notes.md
-          echo "curl -fsSL https://raw.githubusercontent.com/Raindancer118/genesis/main/install.sh | bash" >> release_notes.md
-          echo '```' >> release_notes.md
-          echo "" >> release_notes.md
-          echo "**Windows (PowerShell):**" >> release_notes.md
-          echo '```powershell' >> release_notes.md
-          echo "irm https://raw.githubusercontent.com/Raindancer118/genesis/main/install.ps1 | iex" >> release_notes.md
-          echo '```' >> release_notes.md
+          version = os.environ.get('GITHUB_REF_NAME', 'latest')
+          token   = os.environ['GITHUB_TOKEN']
+
+          # Collect commits since previous tag (or last 20 if first release)
+          try:
+              prev = subprocess.check_output(
+                  ['git', 'describe', '--tags', '--abbrev=0', 'HEAD^'],
+                  stderr=subprocess.DEVNULL, text=True
+              ).strip()
+              commits = subprocess.check_output(
+                  ['git', 'log', f'{prev}..HEAD', '--pretty=format:- %s'],
+                  text=True
+              ).strip()
+          except Exception:
+              commits = subprocess.check_output(
+                  ['git', 'log', '--pretty=format:- %s', '-20'],
+                  text=True
+              ).strip()
+
+          prompt = f"""Write concise, polished release notes for **Volantic Genesis {version}**.
+
+          Commits included in this release:
+          {commits[:2000]}
+
+          Format as GitHub-flavoured Markdown:
+          - Start with a 1–2 sentence summary of what this release brings.
+          - Then group changes under headers using these emojis where applicable:
+            ✨ Features, 🔧 Fixes, 🚀 Improvements, 🏗️ Internals
+          - Keep bullet points brief and user-focused.
+          - Do NOT include the version number or a top-level heading — just the body."""
+
+          payload = json.dumps({
+              "model": "gpt-4o-mini",
+              "messages": [{"role": "user", "content": prompt}],
+              "max_tokens": 600,
+              "temperature": 0.4,
+          }).encode()
+
+          req = urllib.request.Request(
+              'https://models.inference.ai.azure.com/chat/completions',
+              data=payload,
+              headers={
+                  'Authorization': f'Bearer {token}',
+                  'Content-Type': 'application/json',
+              }
+          )
+
+          try:
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  data   = json.loads(resp.read())
+                  notes  = data['choices'][0]['message']['content'].strip()
+          except Exception as e:
+              print(f'::warning::GitHub Models API failed ({e}), falling back to git log', flush=True)
+              notes = '## What\'s Changed\n\n' + commits
+
+          # Append static install / download section
+          downloads = """
+          ## Downloads
+
+          | Platform | File |
+          |---|---|
+          | Linux x86\\_64 | `vg-x86_64-linux.tar.gz` |
+          | Linux ARM64  | `vg-aarch64-linux.tar.gz` |
+          | Windows x64  | `vg-x86_64-windows.zip` |
+
+          **Linux / macOS:**
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/Raindancer118/genesis/main/install.sh | bash
+          ```
+
+          **Windows (PowerShell):**
+          ```powershell
+          irm https://raw.githubusercontent.com/Raindancer118/genesis/main/install.ps1 | iex
+          ```
+          """
+
+          full = notes + '\n' + downloads.strip()
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write('notes<<NOTES_EOF\n')
+              f.write(full)
+              f.write('\nNOTES_EOF\n')
+          PYEOF
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           name: Volantic Genesis ${{ steps.version.outputs.version }}
-          body_path: release_notes.md
+          body: ${{ steps.notes.outputs.notes }}
           files: dist/**
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

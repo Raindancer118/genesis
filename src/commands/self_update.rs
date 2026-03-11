@@ -3,7 +3,7 @@ use anyhow::{Result, Context, anyhow};
 use serde::Deserialize;
 use std::env;
 use std::fs;
-use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 const REPO: &str = "Raindancer118/genesis";

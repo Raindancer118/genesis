@@ -14,20 +14,6 @@ fn rgb(r: u8, g: u8, b: u8, text: &str) -> ColoredString {
 
 pub fn print_header(subtitle: &str) {
     println!();
-    // Bird ASCII art (blue gradient lines)
-    let lines = [
-        ("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", BLUE_DEEP),
-        ("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ◂", BLUE_MID),
-        ("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", BLUE_LIGHT),
-        ("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", BLUE_MID),
-        ("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━", BLUE_PALE),
-        ("    ·  ·  ·", BLUE_PALE),
-    ];
-    for (line, (r, g, b)) in &lines {
-        println!("{}", rgb(*r, *g, *b, line));
-    }
-    println!();
-    // Title
     println!("  {}", gradient_text("V O L A N T I C   G E N E S I S"));
     println!("  {}", rgb(BLUE_MID.0, BLUE_MID.1, BLUE_MID.2, "─────────────────────────────────"));
     println!("  {}", rgb(TEXT_MAIN.0, TEXT_MAIN.1, TEXT_MAIN.2, subtitle).bold());
@@ -53,12 +39,13 @@ fn lerp(a: u8, b: u8, t: f32) -> u8 {
 }
 
 pub fn section(title: &str) {
-    let line = "─".repeat(48);
+    let fill = 44usize.saturating_sub(title.chars().count());
+    let line = "─".repeat(fill);
     println!(
         "\n  {} {} {}",
         rgb(BLUE_DEEP.0, BLUE_DEEP.1, BLUE_DEEP.2, "──"),
         rgb(BLUE_LIGHT.0, BLUE_LIGHT.1, BLUE_LIGHT.2, title).bold(),
-        rgb(BLUE_DEEP.0, BLUE_DEEP.1, BLUE_DEEP.2, &line[..line.len().min(44 - title.len().min(44))])
+        rgb(BLUE_DEEP.0, BLUE_DEEP.1, BLUE_DEEP.2, &line)
     );
 }
 

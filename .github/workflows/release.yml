@@ -19,12 +19,23 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: vg-x86_64-linux
+            ext: ""
+            archive: tar
             cross: false
 
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: vg-aarch64-linux
+            ext: ""
+            archive: tar
             cross: true
+
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: vg-x86_64-windows
+            ext: ".exe"
+            archive: zip
+            cross: false
 
     steps:
       - uses: actions/checkout@v4
@@ -48,8 +59,8 @@ jobs:
         if: matrix.cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Install system deps (native)
-        if: ${{ !matrix.cross }}
+      - name: Install system deps (Linux native)
+        if: ${{ !matrix.cross && matrix.os == 'ubuntu-latest' }}
         run: sudo apt-get install -y build-essential
 
       - name: Build (native)
@@ -60,20 +71,30 @@ jobs:
         if: matrix.cross
         run: cross build --release --target ${{ matrix.target }}
 
-      - name: Package binary
+      - name: Package (tar.gz — Linux)
+        if: matrix.archive == 'tar'
+        shell: bash
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/vg dist/vg
           tar -czf dist/${{ matrix.artifact }}.tar.gz -C dist vg
           sha256sum dist/${{ matrix.artifact }}.tar.gz > dist/${{ matrix.artifact }}.tar.gz.sha256
 
+      - name: Package (zip — Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/vg.exe" "dist/vg.exe"
+          Compress-Archive -Path "dist/vg.exe" -DestinationPath "dist/${{ matrix.artifact }}.zip"
+          $hash = (Get-FileHash "dist/${{ matrix.artifact }}.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  ${{ matrix.artifact }}.zip" | Out-File -Encoding ASCII "dist/${{ matrix.artifact }}.zip.sha256"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: |
-            dist/${{ matrix.artifact }}.tar.gz
-            dist/${{ matrix.artifact }}.tar.gz.sha256
+          path: dist/${{ matrix.artifact }}.*
 
   release:
     name: Create GitHub Release
@@ -94,23 +115,38 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
 
-      - name: Read changelog entry
-        id: changelog
+      - name: Build release notes
         run: |
           if [[ -f CHANGELOG.md ]]; then
-            # Extract the first section from CHANGELOG.md
             awk '/^## \[/{if(found) exit; found=1; next} found{print}' CHANGELOG.md | head -30 > release_notes.md
           else
             echo "See commits for changes." > release_notes.md
           fi
+
+          echo "" >> release_notes.md
+          echo "## Downloads" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "| Platform | File |" >> release_notes.md
+          echo "|---|---|" >> release_notes.md
+          echo "| Linux x86_64 | \`vg-x86_64-linux.tar.gz\` |" >> release_notes.md
+          echo "| Linux ARM64  | \`vg-aarch64-linux.tar.gz\` |" >> release_notes.md
+          echo "| Windows x64  | \`vg-x86_64-windows.zip\` |" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "**Linux / macOS:**" >> release_notes.md
+          echo '```bash' >> release_notes.md
+          echo "curl -fsSL https://raw.githubusercontent.com/Raindancer118/genesis/main/install.sh | bash" >> release_notes.md
+          echo '```' >> release_notes.md
+          echo "" >> release_notes.md
+          echo "**Windows (PowerShell):**" >> release_notes.md
+          echo '```powershell' >> release_notes.md
+          echo "irm https://raw.githubusercontent.com/Raindancer118/genesis/main/install.ps1 | iex" >> release_notes.md
+          echo '```' >> release_notes.md
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           name: Volantic Genesis ${{ steps.version.outputs.version }}
           body_path: release_notes.md
-          files: |
-            dist/*.tar.gz
-            dist/*.sha256
+          files: dist/**
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

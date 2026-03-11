@@ -17,11 +17,17 @@
 
 ## Install
 
+**Linux / macOS**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Raindancer118/genesis/main/install.sh | bash
 ```
+Installs to `/usr/local/bin/vg`. Asks for sudo only for the final copy step.
 
-Installs the pre-built binary to `/usr/local/bin/vg`. Requires sudo for the final copy step (the script will ask).
+**Windows (PowerShell)**
+```powershell
+irm https://raw.githubusercontent.com/Raindancer118/genesis/main/install.ps1 | iex
+```
+Installs to `%LOCALAPPDATA%\Volantic\bin\vg.exe` and adds it to your user PATH automatically.
 
 ---
 

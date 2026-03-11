@@ -1,229 +1,165 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
-# -------------------------------
-# 0) Must run as root
-# -------------------------------
-if [[ "${EUID}" -ne 0 ]]; then
-  echo "🚀 Sudo-Rechte erforderlich. Starte Skript neu mit sudo…"
-  exec sudo --preserve-env=PATH,BASH_ENV "$0" "$@"
-fi
-echo "🚀 Installing/Updating Genesis (Rust Edition) (as root)..."
+# ──────────────────────────────────────────────────────────────
+#  Volantic Genesis — Installer
+#  Usage: curl -fsSL https://raw.githubusercontent.com/Raindancer118/genesis/main/install.sh | bash
+# ──────────────────────────────────────────────────────────────
 
-# -------------------------------
-# 1) Resolve target user
-# -------------------------------
-SUDO_USER_REAL="${SUDO_USER:-}"
-if [[ -z "${SUDO_USER_REAL}" || "${SUDO_USER_REAL}" == "root" ]]; then
-  # Best effort fallback: aktiver TTY-User
-  SUDO_USER_REAL="$(logname 2>/dev/null || true)"
-fi
-if [[ -z "${SUDO_USER_REAL}" || "${SUDO_USER_REAL}" == "root" ]]; then
-  echo "❌ Konnte Zielnutzer nicht ermitteln (SUDO_USER/logname)."
-  echo "   Bitte mit 'sudo -u <user> sudo ./install.sh' ausführen."
-  exit 1
-fi
-echo "➡️  Zielnutzer: ${SUDO_USER_REAL}"
-USER_UID="$(id -u "${SUDO_USER_REAL}")"
-USER_HOME="$(getent passwd "${SUDO_USER_REAL}" | cut -d: -f6)"
+REPO="Raindancer118/genesis"
+BIN_NAME="vg"
+INSTALL_DIR="/usr/local/bin"
+SERVICE_DIR="${HOME}/.config/systemd/user"
+GITHUB_API="https://api.github.com/repos/${REPO}/releases/latest"
 
-# -------------------------------
-# 2) Config
-# -------------------------------
-REPO_URL="https://github.com/Raindancer118/genesis.git"
-INSTALL_DIR="/opt/genesis"
-BIN_DIR="/usr/local/bin"
-APP_NAME="genesis"
+# ── Colors ────────────────────────────────────────────────────
+BLUE='\033[38;2;96;165;250m'
+DIM='\033[38;2;71;85;105m'
+GREEN='\033[38;2;74;222;128m'
+RED='\033[38;2;239;68;68m'
+BOLD='\033[1m'
+RESET='\033[0m'
 
-# -------------------------------
-# 3) Clone / Pull als User
-# -------------------------------
-if [[ ! -d "${INSTALL_DIR}" ]]; then
-  echo "📦 First-time clone nach ${INSTALL_DIR}…"
-  sudo -u "${SUDO_USER_REAL}" git clone "${REPO_URL}" "${INSTALL_DIR}"
-fi
-cd "${INSTALL_DIR}"
+info()    { echo -e "  ${BLUE}·${RESET} $*"; }
+success() { echo -e "  ${GREEN}✓${RESET} $*"; }
+fail()    { echo -e "  ${RED}✗${RESET} $*" >&2; }
+header()  { echo -e "\n${BOLD}${BLUE}  V O L A N T I C   G E N E S I S${RESET}\n  ${DIM}──────────────────────────────────${RESET}\n  $*\n"; }
 
-# Fix ownership before git operations to avoid permission errors
-if [[ -d "${INSTALL_DIR}/.git" ]]; then
-  chown -R "${SUDO_USER_REAL}:${SUDO_USER_REAL}" "${INSTALL_DIR}"
-fi
+# ── Platform detection ────────────────────────────────────────
+detect_target() {
+    local os arch
+    os="$(uname -s)"
+    arch="$(uname -m)"
 
-# Determine current branch and tracking branch
-CURRENT_BRANCH="$(sudo -u "${SUDO_USER_REAL}" git rev-parse --abbrev-ref HEAD 2>/dev/null)"
-if [[ -z "${CURRENT_BRANCH}" || "${CURRENT_BRANCH}" == "HEAD" ]]; then
-  # Detached HEAD state - try to get the default branch from remote
-  CURRENT_BRANCH="$(sudo -u "${SUDO_USER_REAL}" git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
-  if [[ -z "${CURRENT_BRANCH}" ]]; then
-    # Fallback to main if we can't determine
-    CURRENT_BRANCH="main"
-  fi
-fi
-
-TRACKING_BRANCH="$(sudo -u "${SUDO_USER_REAL}" git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "origin/${CURRENT_BRANCH}")"
-
-echo "🔄 Pulling updates as '${SUDO_USER_REAL}' (branch: ${CURRENT_BRANCH})…"
-if sudo -u "${SUDO_USER_REAL}" git pull --ff-only "${TRACKING_BRANCH%%/*}" "${CURRENT_BRANCH}" 2>/dev/null; then
-  echo "✅ Git pull successful."
-else
-  echo "⚠️  Fast-forward pull failed. Trying standard pull…"
-  sudo -u "${SUDO_USER_REAL}" git pull "${TRACKING_BRANCH%%/*}" "${CURRENT_BRANCH}" || {
-    echo "❌ Git pull failed. Continuing with current version…"
-  }
-fi
-
-# -------------------------------
-# 4) Dependencies (Rust & Build Tools)
-# -------------------------------
-echo "🧩 Checking dependencies…"
-ARCH_PACKAGES=(git base-devel) # gcc, make etc for building some crates
-DEBIAN_PACKAGES=(git build-essential pkg-config libssl-dev) # libssl-dev often needed
-# Removed python packages
-
-if command -v pamac >/dev/null 2>&1; then
-  echo "→ Install via pamac"
-  sudo -u "${SUDO_USER_REAL}" pamac install --no-confirm --needed "${ARCH_PACKAGES[@]}" || true
-elif command -v pacman >/dev/null 2>&1; then
-  echo "→ Install via pacman"
-  pacman -Sy --noconfirm --needed "${ARCH_PACKAGES[@]}" || true
-elif command -v apt-get >/dev/null 2>&1 || command -v apt >/dev/null 2>&1; then
-  echo "→ Install via apt"
-  APT_BIN="$(command -v apt-get || command -v apt)"
-  "${APT_BIN}" update
-  "${APT_BIN}" install -y "${DEBIAN_PACKAGES[@]}"
-else
-  echo "⚠️ Kein unterstützter Paketmanager gefunden. Bitte Abhängigkeiten manuell installieren."
-fi
-
-# -------------------------------
-# 5) Rust Setup
-# -------------------------------
-# Check if cargo is in user path
-CARGO_BIN="$(sudo -u "${SUDO_USER_REAL}" bash -c 'command -v cargo' || true)"
-
-if [[ -z "${CARGO_BIN}" ]]; then
-    # Check ~/.cargo/bin explicitely
-    if [[ -x "${USER_HOME}/.cargo/bin/cargo" ]]; then
-        CARGO_BIN="${USER_HOME}/.cargo/bin/cargo"
-    fi
-fi
-
-if [[ -z "${CARGO_BIN}" ]]; then
-    echo "🦀 Rust/Cargo not found. Installing via rustup..."
-    sudo -u "${SUDO_USER_REAL}" curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sudo -u "${SUDO_USER_REAL}" sh -s -- -y
-    CARGO_BIN="${USER_HOME}/.cargo/bin/cargo"
-else
-    echo "✅ Rust detected: ${CARGO_BIN}"
-fi
-
-# -------------------------------
-# 6) Build Genesis
-# -------------------------------
-echo "🔨 Building Genesis (Release)..."
-if [[ -x "${CARGO_BIN}" ]]; then
-    # Must run build as user
-    cd "${INSTALL_DIR}"
-    if sudo -u "${SUDO_USER_REAL}" "${CARGO_BIN}" build --release; then
-        echo "✅ Build successful."
-    else
-        echo "❌ Build failed."
+    if [[ "${os}" != "Linux" ]]; then
+        fail "Unsupported OS: ${os}. Only Linux is supported."
         exit 1
     fi
-else
-    echo "❌ Cargo binary still not found. Build aborted."
-    exit 1
-fi
 
-TARGET_BIN="${INSTALL_DIR}/target/release/genesis"
+    case "${arch}" in
+        x86_64)  echo "vg-x86_64-linux" ;;
+        aarch64) echo "vg-aarch64-linux" ;;
+        armv7l)  echo "vg-aarch64-linux" ;;
+        *)
+            fail "Unsupported architecture: ${arch}"
+            exit 1
+            ;;
+    esac
+}
 
-# -------------------------------
-# 7) Symlink / Install
-# -------------------------------
-if [[ -f "${TARGET_BIN}" ]]; then
-    echo "🔗 Creating system-wide command link..."
-    ln -sf "${TARGET_BIN}" "${BIN_DIR}/${APP_NAME}"
-else
-    echo "❌ Binary not found at ${TARGET_BIN}. Something went wrong."
-    exit 1
-fi
+# ── Fetch latest release download URL ────────────────────────
+get_download_url() {
+    local artifact="$1"
+    local url
 
-# -------------------------------
-# 8) systemd USER units (unchanged logic for functionality)
-# -------------------------------
-echo "🛠️  Preparing systemd user environment…"
-loginctl enable-linger "${SUDO_USER_REAL}" >/dev/null 2>&1 || true
+    if command -v curl &>/dev/null; then
+        url="$(curl -fsSL "${GITHUB_API}" \
+            | grep "browser_download_url" \
+            | grep "${artifact}.tar.gz\"" \
+            | head -1 \
+            | sed 's/.*"browser_download_url": "\(.*\)".*/\1/')"
+    elif command -v wget &>/dev/null; then
+        url="$(wget -qO- "${GITHUB_API}" \
+            | grep "browser_download_url" \
+            | grep "${artifact}.tar.gz\"" \
+            | head -1 \
+            | sed 's/.*"browser_download_url": "\(.*\)".*/\1/')"
+    else
+        fail "Neither curl nor wget found. Please install one of them."
+        exit 1
+    fi
 
-XRD="/run/user/${USER_UID}"
-DBUS_ADDR="unix:path=${XRD}/bus"
+    if [[ -z "${url}" ]]; then
+        fail "Could not find release artifact '${artifact}.tar.gz' on GitHub."
+        fail "Make sure a release exists at: https://github.com/${REPO}/releases"
+        exit 1
+    fi
 
-if [[ ! -d "${XRD}" ]]; then
-  sudo -u "${SUDO_USER_REAL}" systemd-run --user --scope true >/dev/null 2>&1 || true
-  sleep 0.5
-fi
+    echo "${url}"
+}
 
-# Note: We need to make sure the services point to the new binary or just calls 'genesis'?
-# The service files likely called /usr/local/bin/genesis or absolute path.
-# If they called the python script directly, we need to update them.
-# Let's assume they call 'genesis' or we should update them in the repo if they don't.
-# user didn't ask to change service files, but "Existing" install script copied them.
-# We will copy them again.
+# ── Download ──────────────────────────────────────────────────
+download() {
+    local url="$1" dest="$2"
+    if command -v curl &>/dev/null; then
+        curl -fsSL --progress-bar "${url}" -o "${dest}"
+    else
+        wget -q --show-progress "${url}" -O "${dest}"
+    fi
+}
 
-echo "⚙️  Deploy user services…"
-sudo -u "${SUDO_USER_REAL}" mkdir -p "/home/${SUDO_USER_REAL}/.config/systemd/user"
-# In legacy_python, we moved them? 
-# Wait, I moved *everything* to legacy_python, including .service files.
-# I need to restore or recreate service files in root if I want them to work.
-# The user wants "EVERY single feature".
-# I should move service files back to root or `src/service`?
-# Or just copy from legacy_python for now?
-# Task: check if service files exist in root. I moved them.
-# I should copy them back from legacy_python in this script or purely in the repo structure.
-# Proper way: Restore them in repo.
-# I will add a step to copy them from legacy_python in the script if missing?
-# Or better: The repo itself is modified by ME now. I should move the service files back to root in the project structure.
+# ── Install services ──────────────────────────────────────────
+install_services() {
+    local src_dir="$1"
 
-# Script logic for now assumes they are in INSTALL_DIR.
-# If I don't move them back, this fails.
-# I'll update the script to look for them, but I will fix file structure in next tool call.
+    if [[ ! -d "${src_dir}" ]] || ! ls "${src_dir}"/vg-*.service &>/dev/null 2>&1; then
+        return 0
+    fi
 
-if [[ -f "${INSTALL_DIR}/legacy_python/genesis-greet.service" ]]; then
-    sudo -u "${SUDO_USER_REAL}" cp -f \
-      "${INSTALL_DIR}/legacy_python/genesis-greet.service" \
-      "${INSTALL_DIR}/legacy_python/genesis-sentry.service" \
-      "${INSTALL_DIR}/legacy_python/genesis-sentry.timer" \
-      "/home/${SUDO_USER_REAL}/.config/systemd/user/"
-      
-    # Also fix ExecStart in them if they pointed to .py?
-    # Usually they might point to `genesis` binary on path.
-    # I should check them.
-elif [[ -f "${INSTALL_DIR}/genesis-greet.service" ]]; then
-     sudo -u "${SUDO_USER_REAL}" cp -f \
-      "${INSTALL_DIR}/genesis-greet.service" \
-      "${INSTALL_DIR}/genesis-sentry.service" \
-      "${INSTALL_DIR}/genesis-sentry.timer" \
-      "/home/${SUDO_USER_REAL}/.config/systemd/user/"
-fi
+    echo ""
+    read -r -p "  Install systemd user services (vg-greet, vg-sentry)? [y/N] " choice
+    if [[ "${choice}" =~ ^[Yy]$ ]]; then
+        mkdir -p "${SERVICE_DIR}"
+        cp "${src_dir}"/vg-*.service "${src_dir}"/vg-*.timer "${SERVICE_DIR}/" 2>/dev/null || true
+        systemctl --user daemon-reload 2>/dev/null || true
+        systemctl --user enable --now vg-greet.service 2>/dev/null || true
+        systemctl --user enable --now vg-sentry.timer 2>/dev/null || true
+        success "Services installed and enabled"
+    else
+        info "Skipping service installation"
+    fi
+}
 
-# Enable/Start
-sudo -u "${SUDO_USER_REAL}" \
-  XDG_RUNTIME_DIR="${XRD}" \
-  DBUS_SESSION_BUS_ADDRESS="${DBUS_ADDR}" \
-  systemctl --user daemon-reload
+# ── Main ──────────────────────────────────────────────────────
+main() {
+    header "INSTALLER"
 
-sudo -u "${SUDO_USER_REAL}" \
-  XDG_RUNTIME_DIR="${XRD}" \
-  DBUS_SESSION_BUS_ADDRESS="${DBUS_ADDR}" \
-  systemctl --user enable --now genesis-greet.service
+    local artifact
+    artifact="$(detect_target)"
+    info "Detected target: ${artifact}"
 
-sudo -u "${SUDO_USER_REAL}" \
-  XDG_RUNTIME_DIR="${XRD}" \
-  DBUS_SESSION_BUS_ADDRESS="${DBUS_ADDR}" \
-  systemctl --user enable --now genesis-sentry.timer
+    info "Fetching latest release info..."
+    local url
+    url="$(get_download_url "${artifact}")"
+    local version
+    version="$(echo "${url}" | grep -oP 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    info "Latest version: ${version:-unknown}"
 
-# -------------------------------
-# 9) Ownership fix
-# -------------------------------
-echo "🔒 Fix ownership…"
-chown -R "${SUDO_USER_REAL}:${SUDO_USER_REAL}" "${INSTALL_DIR}"
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "${tmp_dir}"' EXIT
 
-echo "✅ Genesis (Rust) installation complete."
+    info "Downloading ${artifact}.tar.gz..."
+    download "${url}" "${tmp_dir}/${artifact}.tar.gz"
+
+    info "Extracting..."
+    tar -xzf "${tmp_dir}/${artifact}.tar.gz" -C "${tmp_dir}"
+
+    info "Installing to ${INSTALL_DIR}/${BIN_NAME}..."
+    if [[ -w "${INSTALL_DIR}" ]]; then
+        cp "${tmp_dir}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
+        chmod +x "${INSTALL_DIR}/${BIN_NAME}"
+    else
+        # Need sudo — ask once
+        echo -e "  ${DIM}(sudo required to write to ${INSTALL_DIR})${RESET}"
+        sudo cp "${tmp_dir}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
+        sudo chmod +x "${INSTALL_DIR}/${BIN_NAME}"
+    fi
+
+    success "${BIN_NAME} installed at ${INSTALL_DIR}/${BIN_NAME}"
+
+    # Try to install services from a cloned repo (optional)
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-install.sh}")" 2>/dev/null && pwd || echo "")"
+    if [[ -n "${script_dir}" && -f "${script_dir}/vg-greet.service" ]]; then
+        install_services "${script_dir}"
+    fi
+
+    echo ""
+    success "Installation complete!"
+    echo ""
+    echo -e "  ${DIM}Run ${RESET}${BOLD}vg --help${RESET}${DIM} to get started.${RESET}"
+    echo ""
+}
+
+main "$@"

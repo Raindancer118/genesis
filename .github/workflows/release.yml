@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact: vg-x86_64-linux
+            cross: false
+
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact: vg-aarch64-linux
+            cross: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Install system deps (native)
+        if: ${{ !matrix.cross }}
+        run: sudo apt-get install -y build-essential
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/vg dist/vg
+          tar -czf dist/${{ matrix.artifact }}.tar.gz -C dist vg
+          sha256sum dist/${{ matrix.artifact }}.tar.gz > dist/${{ matrix.artifact }}.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/${{ matrix.artifact }}.tar.gz
+            dist/${{ matrix.artifact }}.tar.gz.sha256
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Read changelog entry
+        id: changelog
+        run: |
+          if [[ -f CHANGELOG.md ]]; then
+            # Extract the first section from CHANGELOG.md
+            awk '/^## \[/{if(found) exit; found=1; next} found{print}' CHANGELOG.md | head -30 > release_notes.md
+          else
+            echo "See commits for changes." > release_notes.md
+          fi
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Volantic Genesis ${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

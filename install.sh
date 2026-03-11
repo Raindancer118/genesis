@@ -52,22 +52,21 @@ get_download_url() {
     local artifact="$1"
     local url
 
+    local json
     if command -v curl &>/dev/null; then
-        url="$(curl -fsSL "${GITHUB_API}" \
-            | grep "browser_download_url" \
-            | grep "${artifact}.tar.gz\"" \
-            | head -1 \
-            | sed 's/.*"browser_download_url": "\(.*\)".*/\1/')"
+        json="$(curl -fsSL "${GITHUB_API}")"
     elif command -v wget &>/dev/null; then
-        url="$(wget -qO- "${GITHUB_API}" \
-            | grep "browser_download_url" \
-            | grep "${artifact}.tar.gz\"" \
-            | head -1 \
-            | sed 's/.*"browser_download_url": "\(.*\)".*/\1/')"
+        json="$(wget -qO- "${GITHUB_API}")"
     else
         fail "Neither curl nor wget found. Please install one of them."
         exit 1
     fi
+
+    # Extract all browser_download_url values (works on both pretty and minified JSON)
+    url="$(echo "${json}" \
+        | grep -oP '"browser_download_url":\s*"\K[^"]+' \
+        | grep "${artifact}" \
+        | head -1)"
 
     if [[ -z "${url}" ]]; then
         fail "Could not find release artifact '${artifact}.tar.gz' on GitHub."

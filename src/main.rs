@@ -37,6 +37,15 @@ enum Commands {
     /// Lightning-fast file search (SQLite FTS5)
     Search {
         query: String,
+        /// Filter by extension(s), comma-separated (e.g. rs,md,toml)
+        #[arg(short = 'e', long)]
+        ext: Option<String>,
+        /// Limit results to paths starting with this prefix
+        #[arg(short = 'p', long)]
+        path: Option<String>,
+        /// Maximum number of results
+        #[arg(short = 'l', long)]
+        limit: Option<usize>,
     },
     /// Build or show file search index
     Index {
@@ -98,8 +107,13 @@ async fn main() -> Result<()> {
         Commands::Uninstall { pkg } => {
             commands::package::uninstall(&pkg)?;
         }
-        Commands::Search { query } => {
-            commands::search::search(query, &config_manager)?;
+        Commands::Search { query, ext, path, limit } => {
+            commands::search::search(commands::search::SearchParams {
+                query,
+                ext,
+                path_filter: path,
+                limit,
+            }, &config_manager)?;
         }
         Commands::Index { info, paths } => {
             if info {

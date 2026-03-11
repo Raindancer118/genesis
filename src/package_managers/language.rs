@@ -1,0 +1,126 @@
+use super::{PackageManager, PmPackage, is_available, run_cmd};
+use anyhow::Result;
+use std::process::Command;
+
+pub struct Cargo;
+pub struct Npm;
+pub struct Pipx;
+
+impl PackageManager for Cargo {
+    fn id(&self) -> &str { "cargo" }
+    fn display_name(&self) -> &str { "Cargo (Rust)" }
+    fn is_available(&self) -> bool { is_available("cargo") }
+
+    fn update(&self, _yes: bool) -> Result<()> {
+        // cargo install-update -a if cargo-update installed
+        if is_available("cargo-install-update") {
+            run_cmd(&["cargo", "install-update", "-a"], false)
+        } else {
+            Ok(()) // nothing to do without cargo-update
+        }
+    }
+
+    fn search(&self, query: &str) -> Result<Vec<PmPackage>> {
+        let output = Command::new("cargo").args(["search", "--limit", "10", query]).output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut results = Vec::new();
+        for line in stdout.lines() {
+            if line.trim_start().starts_with('#') || line.is_empty() { continue; }
+            // "name = \"version\"    # description"
+            let parts: Vec<&str> = line.splitn(2, '=').collect();
+            if let Some(name) = parts.first() {
+                let rest = parts.get(1).unwrap_or(&"");
+                let version = rest.split('"').nth(1).map(|v| v.to_string());
+                let desc = rest.split('#').nth(1).map(|d| d.trim().to_string());
+                results.push(PmPackage {
+                    name: name.trim().to_string(),
+                    version,
+                    description: desc,
+                    source: "cargo".to_string(),
+                });
+            }
+        }
+        Ok(results)
+    }
+
+    fn install(&self, pkg: &str, _yes: bool) -> Result<()> {
+        run_cmd(&["cargo", "install", pkg], false)
+    }
+
+    fn uninstall(&self, pkg: &str) -> Result<()> {
+        run_cmd(&["cargo", "uninstall", pkg], false)
+    }
+}
+
+impl PackageManager for Npm {
+    fn id(&self) -> &str { "npm" }
+    fn display_name(&self) -> &str { "npm (Node.js)" }
+    fn is_available(&self) -> bool { is_available("npm") }
+
+    fn update(&self, _yes: bool) -> Result<()> {
+        run_cmd(&["npm", "update", "-g"], false)
+    }
+
+    fn search(&self, query: &str) -> Result<Vec<PmPackage>> {
+        let output = Command::new("npm").args(["search", "--json", query]).output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+            if let Some(arr) = json.as_array() {
+                return Ok(arr.iter().take(10).filter_map(|item| {
+                    Some(PmPackage {
+                        name: item["name"].as_str()?.to_string(),
+                        version: item["version"].as_str().map(String::from),
+                        description: item["description"].as_str().map(String::from),
+                        source: "npm".to_string(),
+                    })
+                }).collect());
+            }
+        }
+        Ok(vec![])
+    }
+
+    fn install(&self, pkg: &str, _yes: bool) -> Result<()> {
+        run_cmd(&["npm", "install", "-g", pkg], false)
+    }
+
+    fn uninstall(&self, pkg: &str) -> Result<()> {
+        run_cmd(&["npm", "uninstall", "-g", pkg], false)
+    }
+}
+
+impl PackageManager for Pipx {
+    fn id(&self) -> &str { "pipx" }
+    fn display_name(&self) -> &str { "pipx (Python)" }
+    fn is_available(&self) -> bool { is_available("pipx") }
+
+    fn update(&self, _yes: bool) -> Result<()> {
+        run_cmd(&["pipx", "upgrade-all"], false)
+    }
+
+    fn search(&self, query: &str) -> Result<Vec<PmPackage>> {
+        // pipx has no search; use pip index
+        let output = Command::new("pip").args(["index", "versions", query]).output();
+        if let Ok(o) = output {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            for line in stdout.lines() {
+                if line.contains(query) {
+                    return Ok(vec![PmPackage {
+                        name: query.to_string(),
+                        version: None,
+                        description: None,
+                        source: "pipx".to_string(),
+                    }]);
+                }
+            }
+        }
+        Ok(vec![])
+    }
+
+    fn install(&self, pkg: &str, _yes: bool) -> Result<()> {
+        run_cmd(&["pipx", "install", pkg], false)
+    }
+
+    fn uninstall(&self, pkg: &str) -> Result<()> {
+        run_cmd(&["pipx", "uninstall", pkg], false)
+    }
+}

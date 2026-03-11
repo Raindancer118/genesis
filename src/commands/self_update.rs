@@ -162,21 +162,17 @@ pub fn run() -> Result<()> {
     let exe_str = exe_path.to_str().unwrap();
     let new_str = new_bin.to_str().unwrap();
 
-    let needs_sudo = !exe_path.parent().map(|p| {
-        // Check if we can write to the directory
-        p.metadata().map(|m| !m.permissions().readonly()).unwrap_or(false)
-    }).unwrap_or(false);
-
-    if needs_sudo {
+    // Try without sudo first; if permission denied, fall back to sudo.
+    // (permissions().readonly() doesn't reflect actual user access — just try it.)
+    if fs::remove_file(&exe_path).is_ok() {
+        fs::copy(&new_bin, &exe_path).context("Failed to copy new binary")?;
+    } else {
         ui::skip("Needs elevated privileges to replace binary...");
         let rm = std::process::Command::new("sudo").args(["rm", "-f", exe_str]).status()?;
         if !rm.success() { return Err(anyhow!("Failed to remove old binary")); }
         let cp = std::process::Command::new("sudo").args(["cp", new_str, exe_str]).status()?;
         if !cp.success() { return Err(anyhow!("Failed to copy new binary")); }
         std::process::Command::new("sudo").args(["chmod", "+x", exe_str]).status()?;
-    } else {
-        fs::remove_file(&exe_path).context("Failed to remove old binary")?;
-        fs::copy(&new_bin, &exe_path).context("Failed to copy new binary")?;
     }
 
     println!();

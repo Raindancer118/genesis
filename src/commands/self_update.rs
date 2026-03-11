@@ -6,9 +6,8 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-const REPO: &str = "Raindancer118/genesis";
 const API_URL: &str = "https://api.github.com/repos/Raindancer118/genesis/releases/latest";
-const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Deserialize)]
 struct GithubRelease {
@@ -17,10 +16,17 @@ struct GithubRelease {
     body: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct GithubAsset {
-    name: String,
-    browser_download_url: String,
+#[derive(Deserialize, Clone)]
+pub struct GithubAsset {
+    pub name: String,
+    pub browser_download_url: String,
+}
+
+/// Metadata about an available update. Returned by `check()`.
+pub struct UpdateInfo {
+    pub latest_version: String,
+    pub asset: GithubAsset,
+    pub release_notes: Option<String>,
 }
 
 fn detect_artifact() -> &'static str {
@@ -51,8 +57,7 @@ fn fetch_latest_release() -> Result<GithubRelease> {
 }
 
 fn version_is_newer(latest: &str, current: &str) -> bool {
-    // Strip leading 'v'
-    let latest = latest.trim_start_matches('v');
+    let latest  = latest.trim_start_matches('v');
     let current = current.trim_start_matches('v');
 
     let parse = |v: &str| -> (u32, u32, u32) {
@@ -68,14 +73,10 @@ fn version_is_newer(latest: &str, current: &str) -> bool {
 }
 
 /// Try to atomically replace `dst` with `src` using rename().
-/// Falls back to: copy `src` next to `dst`, then rename (handles cross-device moves).
-/// Returns true on success, false if we need elevated privileges.
 fn replace_binary(src: &std::path::Path, dst: &std::path::Path) -> bool {
-    // Direct rename — works when src and dst are on the same filesystem.
     if fs::rename(src, dst).is_ok() {
         return true;
     }
-    // Cross-device: stage a copy adjacent to the destination, then rename.
     let Some(parent) = dst.parent() else { return false };
     let staged = parent.join(".vg-update-staged");
     if fs::copy(src, &staged).is_err() {
@@ -86,52 +87,31 @@ fn replace_binary(src: &std::path::Path, dst: &std::path::Path) -> bool {
     if fs::rename(&staged, dst).is_ok() {
         return true;
     }
-    // Staged rename failed — clean up and signal that sudo is needed.
     let _ = fs::remove_file(&staged);
     false
 }
 
-pub fn run() -> Result<()> {
-    ui::print_header("SELF UPDATE");
-
-    ui::info_line("Current version", &format!("v{}", CURRENT_VERSION));
-    ui::section("Checking for updates");
-
-    let release = fetch_latest_release().context("Could not fetch release info from GitHub")?;
-    let latest_version = &release.tag_name;
-
-    ui::info_line("Latest version", latest_version);
-
-    if !version_is_newer(latest_version, CURRENT_VERSION) {
-        println!();
-        ui::success("Already up to date.");
-        return Ok(());
+/// Check GitHub for a newer release. Returns `None` if already up to date or unreachable.
+pub fn check() -> Option<UpdateInfo> {
+    let release = fetch_latest_release().ok()?;
+    if !version_is_newer(&release.tag_name, CURRENT_VERSION) {
+        return None;
     }
-
-    ui::success(&format!("New version available: {}", latest_version));
-
-    // Show release notes
-    if let Some(body) = &release.body {
-        let notes: String = body.lines().take(12).collect::<Vec<_>>().join("\n");
-        if !notes.trim().is_empty() {
-            ui::section("Release Notes");
-            for line in notes.lines() {
-                println!("  {}", line);
-            }
-        }
-    }
-
-    // Find the right artifact
     let artifact_name = detect_artifact();
-    let asset = release.assets.iter()
-        .find(|a| a.name == artifact_name)
-        .ok_or_else(|| anyhow!("No artifact '{}' found in release {}", artifact_name, latest_version))?;
+    let asset = release.assets.iter().find(|a| a.name == artifact_name)?.clone();
+    Some(UpdateInfo {
+        latest_version: release.tag_name,
+        asset,
+        release_notes: release.body,
+    })
+}
 
-    ui::section(&format!("Downloading {}", artifact_name));
+/// Download and install the update described by `info`. Shows progress via `ui`.
+pub fn apply(info: &UpdateInfo) -> Result<()> {
+    let artifact_name = &info.asset.name;
 
-    // Download to temp file
     let tmp_dir = tempfile::tempdir().context("Failed to create temp dir")?;
-    let archive_path = tmp_dir.path().join(artifact_name);
+    let archive_path = tmp_dir.path().join(artifact_name.as_str());
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
@@ -139,19 +119,15 @@ pub fn run() -> Result<()> {
         .build()?;
 
     let bytes = client
-        .get(&asset.browser_download_url)
+        .get(&info.asset.browser_download_url)
         .send()
         .context("Download failed")?
         .bytes()
         .context("Failed to read download")?;
 
     fs::write(&archive_path, &bytes).context("Failed to write archive")?;
-    ui::success(&format!("{:.1} MB downloaded", bytes.len() as f64 / 1_048_576.0));
 
     // Extract
-    ui::section("Installing");
-    let bin_path = tmp_dir.path().join("vg");
-
     if artifact_name.ends_with(".tar.gz") {
         let status = std::process::Command::new("tar")
             .args(["-xzf", archive_path.to_str().unwrap(), "-C", tmp_dir.path().to_str().unwrap()])
@@ -166,31 +142,22 @@ pub fn run() -> Result<()> {
         if !status.success() { return Err(anyhow!("unzip extraction failed")); }
     }
 
-    // Replace current binary
-    let exe_path = env::current_exe().context("Cannot determine current executable path")?;
-
-    // Try direct copy first, fall back to sudo
     let new_bin = if artifact_name.ends_with(".zip") {
         tmp_dir.path().join("vg.exe")
     } else {
-        bin_path
+        tmp_dir.path().join("vg")
     };
 
-    // Make executable
     #[cfg(unix)]
     fs::set_permissions(&new_bin, fs::Permissions::from_mode(0o755))
         .context("Failed to set permissions")?;
 
-    let exe_str = exe_path.to_str().unwrap();
-    let new_str = new_bin.to_str().unwrap();
+    let exe_path = env::current_exe().context("Cannot determine current executable path")?;
+    let exe_str  = exe_path.to_str().unwrap();
+    let new_str  = new_bin.to_str().unwrap();
 
-    // Strategy: rename() atomically swaps the directory entry — it never writes to the
-    // existing inode, so ETXTBSY cannot occur even on a running binary.
-    // If rename fails (cross-device move), copy into the same directory first, then rename.
-    // Only if we genuinely lack permission fall back to `sudo install`.
     if !replace_binary(&new_bin, &exe_path) {
         ui::skip("Needs elevated privileges to replace binary...");
-        // `sudo install` creates a new file at the destination (no in-place write) — avoids ETXTBSY.
         let status = std::process::Command::new("sudo")
             .args(["install", "-m", "755", new_str, exe_str])
             .status()
@@ -200,7 +167,38 @@ pub fn run() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Entry point for `vg self-update` — interactive, shows header + release notes.
+pub fn run() -> Result<()> {
+    ui::print_header("SELF UPDATE");
+    ui::info_line("Current version", &format!("v{}", CURRENT_VERSION));
+    ui::section("Checking for updates");
+
+    let Some(info) = check() else {
+        println!();
+        ui::success("Already up to date.");
+        return Ok(());
+    };
+
+    ui::info_line("Latest version", &info.latest_version);
+    ui::success(&format!("New version available: {}", info.latest_version));
+
+    if let Some(body) = &info.release_notes {
+        let notes: String = body.lines().take(12).collect::<Vec<_>>().join("\n");
+        if !notes.trim().is_empty() {
+            ui::section("Release Notes");
+            for line in notes.lines() {
+                println!("  {}", line);
+            }
+        }
+    }
+
+    ui::section(&format!("Downloading {}", info.asset.name));
+    apply(&info)?;
+
     println!();
-    ui::success(&format!("Updated to {} — restart vg to use the new version.", latest_version));
+    ui::success(&format!("Updated to {} — restart vg to use the new version.", info.latest_version));
     Ok(())
 }

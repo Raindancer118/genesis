@@ -1,5 +1,6 @@
 use crate::ui;
 use crate::package_managers::get_available_managers;
+use crate::commands::self_update::{self, CURRENT_VERSION};
 use anyhow::Result;
 use colored::Colorize;
 
@@ -81,6 +82,36 @@ pub fn run(yes: bool) -> Result<()> {
         }
         println!();
     }
+
+    // ── Genesis self-update ───────────────────────────────────────
+    ui::section("Updating Volantic Genesis");
+
+    println!("  {}", "Checking for new release...".truecolor(71, 85, 105));
+    match self_update::check() {
+        None => {
+            // Clear the "checking..." line with a done status
+            print!("\x1b[1A\x1b[2K");
+            ui::success(&format!("vg — up to date (v{})", CURRENT_VERSION));
+        }
+        Some(info) => {
+            print!("\x1b[1A\x1b[2K");
+            print_pkg_row("vg", &format!("v{}", CURRENT_VERSION), &info.latest_version, false);
+            println!();
+
+            match self_update::apply(&info) {
+                Ok(()) => {
+                    print_pkg_row("vg", &format!("v{}", CURRENT_VERSION), &info.latest_version, true);
+                    println!();
+                    ui::success(&format!(
+                        "Genesis updated to {} — restart vg to apply",
+                        info.latest_version
+                    ));
+                }
+                Err(e) => ui::fail(&format!("Genesis update failed: {}", e)),
+            }
+        }
+    }
+    println!();
 
     if any_updated {
         ui::success("All updates applied.");

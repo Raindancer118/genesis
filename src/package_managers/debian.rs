@@ -16,8 +16,7 @@ impl PackageManager for Apt {
     }
 
     fn list_updates(&self) -> Vec<PmUpdate> {
-        // Refresh index silently first, then list upgradable
-        let _ = Command::new("sudo").args(["apt", "update", "-qq"]).output();
+        // Just query the already-cached index; the actual `apt update` runs during update()
         let Ok(out) = Command::new("apt").args(["list", "--upgradable"]).output() else { return vec![] };
         // Format: "name/release new_ver arch [upgradable from: old_ver]"
         String::from_utf8_lossy(&out.stdout)

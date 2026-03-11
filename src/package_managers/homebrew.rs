@@ -15,8 +15,7 @@ impl PackageManager for Brew {
     }
 
     fn list_updates(&self) -> Vec<PmUpdate> {
-        // brew fetch index first, then list outdated as JSON
-        let _ = Command::new("brew").args(["update", "--quiet"]).output();
+        // Query cached state; `brew update` runs during update()
         let Ok(out) = Command::new("brew").args(["outdated", "--json=v2"]).output() else { return vec![] };
         let text = String::from_utf8_lossy(&out.stdout);
         let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else { return vec![] };

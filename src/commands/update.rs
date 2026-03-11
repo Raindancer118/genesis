@@ -40,20 +40,32 @@ pub fn run(yes: bool) -> Result<()> {
     }
     println!();
 
+    // Collect pending updates for all managers in parallel — no waiting for slow ones.
+    ui::section("Checking for updates");
+    let pending_all: Vec<_> = std::thread::scope(|s| {
+        managers.iter()
+            .map(|m| s.spawn(|| m.list_updates()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().unwrap_or_default())
+            .collect()
+    });
+    println!();
+
     let mut any_updated = false;
 
-    for manager in &managers {
+    for (manager, pending) in managers.iter().zip(pending_all.iter()) {
         ui::section(&format!("Updating via {}", manager.display_name()));
 
-        let pending = manager.list_updates();
+        let n = pending.len();
 
         if !pending.is_empty() {
             println!(
                 "  {}\n",
-                format!("{} package{} queued:", pending.len(), if pending.len() == 1 { "" } else { "s" })
+                format!("{} package{} queued:", n, if n == 1 { "" } else { "s" })
                     .truecolor(147, 197, 253)
             );
-            for (name, old_ver, new_ver) in &pending {
+            for (name, old_ver, new_ver) in pending.iter() {
                 print_pkg_row(name, old_ver, new_ver, false);
             }
             println!();
@@ -64,16 +76,15 @@ pub fn run(yes: bool) -> Result<()> {
                 if pending.is_empty() {
                     ui::success(&format!("{} — up to date", manager.display_name()));
                 } else {
-                    // Reprint package list with checkmarks
-                    for (name, old_ver, new_ver) in &pending {
+                    for (name, old_ver, new_ver) in pending.iter() {
                         print_pkg_row(name, old_ver, new_ver, true);
                     }
                     println!();
                     ui::success(&format!(
                         "{} — {} package{} updated",
                         manager.display_name(),
-                        pending.len(),
-                        if pending.len() == 1 { "" } else { "s" }
+                        n,
+                        if n == 1 { "" } else { "s" }
                     ));
                     any_updated = true;
                 }

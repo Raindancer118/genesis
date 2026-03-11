@@ -75,6 +75,8 @@ enum Commands {
         /// Value to set
         value: Option<String>,
     },
+    /// Create a bootable Manjaro KDE USB stick with Ventoy
+    Manjaro,
 }
 
 #[tokio::main]
@@ -129,6 +131,7 @@ async fn main() -> Result<()> {
         Commands::Info => "info",
         Commands::SelfUpdate => "self-update",
         Commands::Config { .. } => "config",
+        Commands::Manjaro => "manjaro",
     };
     analytics::track_command(&config_manager, cmd_name);
 
@@ -183,6 +186,9 @@ async fn main() -> Result<()> {
         }
         Commands::Config { action, key, value } => {
             commands::config_cmd::run(action, key, value, &mut config_manager)?;
+        }
+        Commands::Manjaro => {
+            commands::manjaro::run()?;
         }
     }
 

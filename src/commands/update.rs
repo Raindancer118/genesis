@@ -3,6 +3,26 @@ use crate::package_managers::get_available_managers;
 use anyhow::Result;
 use colored::Colorize;
 
+fn print_pkg_row(name: &str, old_ver: &str, new_ver: &str, done: bool) {
+    let bullet = if done {
+        "✓".truecolor(74, 222, 128).to_string()
+    } else {
+        "·".truecolor(71, 85, 105).to_string()
+    };
+    let name_col = if done {
+        name.truecolor(74, 222, 128).to_string()
+    } else {
+        name.truecolor(224, 242, 254).to_string()
+    };
+    println!(
+        "    {} {:<30} {}  →  {}",
+        bullet,
+        name_col,
+        old_ver.truecolor(71, 85, 105),
+        new_ver.truecolor(96, 165, 250),
+    );
+}
+
 pub fn run(yes: bool) -> Result<()> {
     ui::print_header("SYSTEM UPDATE");
 
@@ -24,22 +44,16 @@ pub fn run(yes: bool) -> Result<()> {
     for manager in &managers {
         ui::section(&format!("Updating via {}", manager.display_name()));
 
-        // Show pending updates if the PM supports it
         let pending = manager.list_updates();
+
         if !pending.is_empty() {
             println!(
-                "  {}",
-                format!("{} package{} to update:", pending.len(), if pending.len() == 1 { "" } else { "s" })
+                "  {}\n",
+                format!("{} package{} queued:", pending.len(), if pending.len() == 1 { "" } else { "s" })
                     .truecolor(147, 197, 253)
             );
-            println!();
             for (name, old_ver, new_ver) in &pending {
-                println!(
-                    "    {:<28} {}  →  {}",
-                    name.truecolor(224, 242, 254),
-                    old_ver.truecolor(71, 85, 105),
-                    new_ver.truecolor(74, 222, 128),
-                );
+                print_pkg_row(name, old_ver, new_ver, false);
             }
             println!();
         }
@@ -49,6 +63,11 @@ pub fn run(yes: bool) -> Result<()> {
                 if pending.is_empty() {
                     ui::success(&format!("{} — up to date", manager.display_name()));
                 } else {
+                    // Reprint package list with checkmarks
+                    for (name, old_ver, new_ver) in &pending {
+                        print_pkg_row(name, old_ver, new_ver, true);
+                    }
+                    println!();
                     ui::success(&format!(
                         "{} — {} package{} updated",
                         manager.display_name(),

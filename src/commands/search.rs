@@ -266,7 +266,10 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
     let start = std::time::Instant::now();
 
     let fts_query = sanitize_fts_query(&params.query);
-    let limit = params.limit.unwrap_or(config.config.search.max_results as usize);
+    // Default: show 10; user can override with --limit
+    let limit = params.limit.unwrap_or(10);
+    // Fetch more than needed so we know if there are additional results
+    let fetch_limit = limit + 1;
 
     // Build ext filter clause
     let ext_clause = if let Some(ref ext_str) = params.ext {
@@ -300,7 +303,7 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
              FROM files f
              JOIN files_meta m ON f.rowid = m.rowid
              WHERE {}
-             ORDER BY rank
+             ORDER BY bm25(files, 10.0, 5.0, 1.0)
              LIMIT ?2",
             conditions.join(" AND ")
         )
@@ -308,11 +311,11 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
 
     let mut fts_results: Vec<SearchResult> = {
         let mut stmt = conn.prepare(&sql)?;
-        let limit_i64 = limit as i64;
+        let fetch_limit_i64 = fetch_limit as i64;
 
         if path_pattern.is_some() {
             stmt.query_map(
-                params![fts_query, limit_i64, path_pattern.as_deref()],
+                params![fts_query, fetch_limit_i64, path_pattern.as_deref()],
                 |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
@@ -330,7 +333,7 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
             }).collect()
         } else {
             stmt.query_map(
-                params![fts_query, limit_i64],
+                params![fts_query, fetch_limit_i64],
                 |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
@@ -400,16 +403,23 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
     }
 
     let elapsed = start.elapsed();
+    let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
 
     if fts_results.is_empty() {
         ui::skip("No results found.");
         return Ok(());
     }
 
+    // has_more: we fetched limit+1 results; if we got exactly that, there are more
+    let has_more = fts_results.len() > limit;
+    if has_more {
+        fts_results.truncate(limit);
+    }
+
     let total = fts_results.len();
     let top_count = total.min(3);
 
-    // Print top results
+    // ── Top Results ───────────────────────────────────
     println!();
     println!("  {} {}",
         "──".truecolor(37, 99, 235),
@@ -418,18 +428,12 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
     println!();
 
     for (i, result) in fts_results.iter().take(top_count).enumerate() {
-        let rank = i + 1;
+        let rank_str = format!("{}", i + 1).truecolor(96, 165, 250);
         let star = "★".truecolor(250, 204, 21);
-        let rank_str = format!("{}", rank).truecolor(96, 165, 250);
         let path_str = result.path.truecolor(224, 242, 254);
         let badge = format!("{:<8}", result.match_type).truecolor(71, 85, 105);
 
-        println!("   {}  {}   {}   {}",
-            star,
-            rank_str,
-            path_str,
-            badge
-        );
+        println!("   {}  {}   {}   {}", star, rank_str, path_str, badge);
 
         if result.match_type == "content" {
             if let Some(ref snip) = result.snippet {
@@ -439,14 +443,12 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
         println!();
     }
 
-    // If there are more than 3 results, show "All Results" section
+    // ── All Results ───────────────────────────────────
     if total > 3 {
-        let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
-        let section_title = format!("All Results · {} found · {:.1}ms", total, elapsed_ms);
+        let section_title = format!("All Results · {:.1}ms", elapsed_ms);
         let fill = 44usize.saturating_sub(section_title.chars().count());
         let line = "─".repeat(fill);
-        println!(
-            "\n  {} {} {}",
+        println!("\n  {} {} {}",
             "──".truecolor(37, 99, 235),
             section_title.truecolor(96, 165, 250).bold(),
             line.truecolor(37, 99, 235)
@@ -454,20 +456,22 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
         println!();
 
         for (i, result) in fts_results.iter().enumerate().skip(3) {
-            let rank = i + 1;
-            let rank_str = format!("{:>3}", rank).truecolor(96, 165, 250);
+            let rank_str = format!("{:>3}", i + 1).truecolor(96, 165, 250);
             let path_str = result.path.truecolor(224, 242, 254);
-            println!("      {}   {}", rank_str, path_str);
+            let badge = format!("{:<8}", result.match_type).truecolor(71, 85, 105);
+            println!("      {}   {}   {}", rank_str, path_str, badge);
         }
         println!();
     } else {
-        // Still show timing if <= 3 results
-        let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
         println!("  {} {} · {:.1}ms",
             "──".truecolor(37, 99, 235),
             format!("{} found", total).truecolor(96, 165, 250),
             elapsed_ms
         );
+    }
+
+    if has_more {
+        ui::skip(&format!("More results available — use --limit {} to show more", limit * 2));
     }
 
     Ok(())

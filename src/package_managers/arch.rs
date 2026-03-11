@@ -1,4 +1,4 @@
-use super::{PackageManager, PmPackage, is_available, run_cmd};
+use super::{PackageManager, PmPackage, PmUpdate, is_available, run_cmd, run_cmd_quiet};
 use anyhow::Result;
 use std::process::Command;
 
@@ -13,10 +13,23 @@ impl PackageManager for Pamac {
     fn is_available(&self) -> bool { is_available("pamac") }
     fn needs_sudo(&self) -> bool { false }
 
-    fn update(&self, yes: bool) -> Result<()> {
-        let mut args = vec!["pamac", "upgrade"];
-        if yes { args.push("--no-confirm"); }
-        run_cmd(&args, false)
+    fn update(&self, _yes: bool) -> Result<()> {
+        // Always non-interactive: we show the package list ourselves before running.
+        run_cmd_quiet(&["pamac", "upgrade", "--no-confirm"], false)
+    }
+
+    fn list_updates(&self) -> Vec<PmUpdate> {
+        let Ok(out) = Command::new("pamac").args(["checkupdates"]).output() else { return vec![] };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut updates = Vec::new();
+        for line in text.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            // Format: "name old_ver -> new_ver [repo]"
+            if parts.len() >= 4 && parts[2] == "->" {
+                updates.push((parts[0].to_string(), parts[1].to_string(), parts[3].to_string()));
+            }
+        }
+        updates
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {
@@ -56,10 +69,8 @@ impl PackageManager for Yay {
     fn display_name(&self) -> &str { "Yay (AUR)" }
     fn is_available(&self) -> bool { is_available("yay") }
 
-    fn update(&self, yes: bool) -> Result<()> {
-        let mut args = vec!["yay", "-Syu"];
-        if yes { args.push("--noconfirm"); }
-        run_cmd(&args, false)
+    fn update(&self, _yes: bool) -> Result<()> {
+        run_cmd_quiet(&["yay", "-Syu", "--noconfirm"], false)
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {
@@ -83,10 +94,8 @@ impl PackageManager for Paru {
     fn display_name(&self) -> &str { "Paru (AUR)" }
     fn is_available(&self) -> bool { is_available("paru") }
 
-    fn update(&self, yes: bool) -> Result<()> {
-        let mut args = vec!["paru", "-Syu"];
-        if yes { args.push("--noconfirm"); }
-        run_cmd(&args, false)
+    fn update(&self, _yes: bool) -> Result<()> {
+        run_cmd_quiet(&["paru", "-Syu", "--noconfirm"], false)
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {
@@ -111,10 +120,8 @@ impl PackageManager for Pacman {
     fn is_available(&self) -> bool { is_available("pacman") }
     fn needs_sudo(&self) -> bool { true }
 
-    fn update(&self, yes: bool) -> Result<()> {
-        let mut args = vec!["pacman", "-Syu"];
-        if yes { args.push("--noconfirm"); }
-        run_cmd(&args, true)
+    fn update(&self, _yes: bool) -> Result<()> {
+        run_cmd_quiet(&["pacman", "-Syu", "--noconfirm"], true)
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {

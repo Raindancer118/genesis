@@ -1,4 +1,4 @@
-use super::{PackageManager, PmPackage, is_available, run_cmd};
+use super::{PackageManager, PmPackage, is_available, run_cmd, run_cmd_quiet};
 use anyhow::Result;
 use std::process::Command;
 
@@ -11,7 +11,7 @@ impl PackageManager for Flatpak {
     fn is_available(&self) -> bool { is_available("flatpak") }
 
     fn update(&self, _yes: bool) -> Result<()> {
-        run_cmd(&["flatpak", "update", "-y"], false)
+        run_cmd_quiet(&["flatpak", "update", "-y"], false)
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {
@@ -50,7 +50,7 @@ impl PackageManager for Snap {
     fn needs_sudo(&self) -> bool { true }
 
     fn update(&self, _yes: bool) -> Result<()> {
-        run_cmd(&["snap", "refresh"], true)
+        run_cmd_quiet(&["snap", "refresh"], true)
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {

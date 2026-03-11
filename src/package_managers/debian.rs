@@ -1,4 +1,4 @@
-use super::{PackageManager, PmPackage, is_available, run_cmd};
+use super::{PackageManager, PmPackage, is_available, run_cmd, run_cmd_quiet};
 use anyhow::Result;
 use std::process::Command;
 
@@ -10,11 +10,9 @@ impl PackageManager for Apt {
     fn is_available(&self) -> bool { is_available("apt") }
     fn needs_sudo(&self) -> bool { true }
 
-    fn update(&self, yes: bool) -> Result<()> {
-        run_cmd(&["apt", "update"], true)?;
-        let mut args = vec!["apt", "upgrade"];
-        if yes { args.push("-y"); }
-        run_cmd(&args, true)
+    fn update(&self, _yes: bool) -> Result<()> {
+        run_cmd_quiet(&["apt", "update"], true)?;
+        run_cmd_quiet(&["apt", "upgrade", "-y"], true)
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {

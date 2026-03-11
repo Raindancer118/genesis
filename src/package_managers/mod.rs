@@ -15,6 +15,9 @@ pub struct PmPackage {
     pub source: String,
 }
 
+/// A pending package update: (name, old_version, new_version).
+pub type PmUpdate = (String, String, String);
+
 pub trait PackageManager: Send + Sync {
     fn id(&self) -> &str;
     fn display_name(&self) -> &str;
@@ -24,6 +27,8 @@ pub trait PackageManager: Send + Sync {
     fn install(&self, pkg: &str, yes: bool) -> Result<()>;
     fn uninstall(&self, pkg: &str) -> Result<()>;
     fn needs_sudo(&self) -> bool { false }
+    /// Return pending updates without applying them. Empty = unsupported or none.
+    fn list_updates(&self) -> Vec<PmUpdate> { vec![] }
 }
 
 pub fn get_all_managers() -> Vec<Box<dyn PackageManager>> {
@@ -50,19 +55,24 @@ pub fn is_available(cmd: &str) -> bool {
     which(cmd).is_ok()
 }
 
-/// Run a command, returning Ok if exit code 0
+/// Run a command with inherited I/O (interactive — shows all output).
 pub fn run_cmd(args: &[&str], sudo: bool) -> Result<()> {
-    use std::process::Command;
-    let (prog, rest) = if sudo {
-        ("sudo", args)
-    } else {
-        (args[0], &args[1..])
-    };
+    run_cmd_impl(args, sudo, false)
+}
+
+/// Run a command silently (stdout+stderr captured/discarded).
+/// stdin is inherited so TTY-based prompts (e.g. polkit password) still work.
+pub fn run_cmd_quiet(args: &[&str], sudo: bool) -> Result<()> {
+    run_cmd_impl(args, sudo, true)
+}
+
+fn run_cmd_impl(args: &[&str], sudo: bool, quiet: bool) -> Result<()> {
+    use std::process::{Command, Stdio};
+    let (prog, rest) = if sudo { ("sudo", args) } else { (args[0], &args[1..]) };
     let mut cmd = Command::new(prog);
-    if sudo {
-        cmd.args(args);
-    } else {
-        cmd.args(rest);
+    if sudo { cmd.args(args); } else { cmd.args(rest); }
+    if quiet {
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
     }
     let status = cmd.status()?;
     if !status.success() {

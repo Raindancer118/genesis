@@ -130,65 +130,74 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 << 'PYEOF'
-          import subprocess, json, urllib.request, os, sys
+          import subprocess, json, urllib.request, os, textwrap
 
           version = os.environ.get('GITHUB_REF_NAME', 'latest')
           token   = os.environ['GITHUB_TOKEN']
 
           # Full commit log (subject + body) since previous tag
-          log_format = '---commit---\n%s\n%b'
+          log_fmt = '---commit---\n%s\n%b'
           try:
               prev = subprocess.check_output(
                   ['git', 'describe', '--tags', '--abbrev=0', 'HEAD^'],
                   stderr=subprocess.DEVNULL, text=True
               ).strip()
               commits = subprocess.check_output(
-                  ['git', 'log', f'{prev}..HEAD', f'--pretty=format:{log_format}'],
+                  ['git', 'log', prev + '..HEAD', '--pretty=format:' + log_fmt],
                   text=True
               ).strip()
           except Exception:
               commits = subprocess.check_output(
-                  ['git', 'log', f'--pretty=format:{log_format}', '-30'],
+                  ['git', 'log', '--pretty=format:' + log_fmt, '-30'],
                   text=True
               ).strip()
 
-          prompt = f"""You are writing the official release notes for **Volantic Genesis {version}**, a fast system CLI tool for Linux (and Windows) that wraps package managers (pamac, yay, pacman, apt, flatpak, cargo, npm, pipx, brew), provides a lightning-fast indexed file search, and includes system info, health checks, and self-update functionality.
+          # Build prompt in parts so every line stays indented inside the YAML block scalar
+          preamble = textwrap.dedent("""\
+              You are writing the official release notes for Volantic Genesis {version}.
+              It is a fast system CLI for Linux and Windows that wraps package managers
+              (pamac, yay, pacman, apt, flatpak, cargo, npm, pipx, brew), provides
+              lightning-fast indexed file search, system info, health checks, and self-update.
 
-The audience is a mix of end users (who care what changed for them) and technical users (who want to know *why* and *how* things changed under the hood).
+              The audience is both end users (what visibly changed for them) and technical
+              users (why and how things changed under the hood).
 
-Here are the raw git commits included in this release:
+              Raw git commits in this release:
+          """).replace('{version}', version)
 
-{commits[:4000]}
+          rules = textwrap.dedent("""\
+              Write detailed, well-structured release notes in GitHub-flavoured Markdown:
 
-Write detailed, well-structured release notes in GitHub-flavoured Markdown. Follow these rules exactly:
+              1. Open with a 2-3 sentence highlight paragraph — the single most important
+                 thing about this release that users should know.
 
-1. Start with a **2–3 sentence highlight paragraph** — what is the most important thing about this release? What should users be excited about?
+              2. Then include these sections ONLY if there are relevant changes (skip empty ones):
 
-2. Then use the following sections **only if there are relevant changes** — skip empty sections entirely:
+              ### ✨ New Features
+              Bold title per feature, then 1-2 sentences on what it does and why it helps.
 
-### ✨ New Features
-List each new feature with a short title in bold, then 1–2 sentences explaining what it does and why it's useful to the user.
+              ### 🔧 Bug Fixes
+              Bold title, then: what was broken, what the symptom was, how it is now fixed.
 
-### 🔧 Bug Fixes
-For each fix: bold title, then explain what was broken, what the symptom was, and how it's now resolved.
+              ### 🚀 Improvements
+              UX wins, performance gains, better output — describe the before vs. after.
 
-### 🚀 Improvements
-UX improvements, performance wins, better output — explain the before/after from the user's perspective.
+              ### 🏗️ Under the Hood
+              Architecture, dependencies, CI/CD. Explain what changed and why for developers.
 
-### 🏗️ Under the Hood
-Technical changes: architecture, dependencies, CI/CD, internals. Explain briefly what changed and why, for developers following the project.
+              Style rules:
+              - Be specific: name actual components (self-update, vg update, pamac, FTS5 index).
+              - No padding — if a section has nothing real, omit it entirely.
+              - Do NOT include the version number or a top-level heading.
+          """)
 
-Rules:
-- Be specific — mention actual component names (e.g. "self-update", "vg update", "pamac", "FTS5 index").
-- Do NOT pad with filler. If a section has nothing worth mentioning, omit it.
-- Do NOT include the version number or a top-level `#` heading — the release title is added separately.
-- Bullet points within sections are fine for listing multiple items."""
+          prompt = preamble + '\n' + commits[:4000] + '\n\n' + rules
 
           payload = json.dumps({
-              "model": "gpt-4o",
-              "messages": [{"role": "user", "content": prompt}],
-              "max_tokens": 1200,
-              "temperature": 0.3,
+              'model': 'gpt-4o',
+              'messages': [{'role': 'user', 'content': prompt}],
+              'max_tokens': 1200,
+              'temperature': 0.3,
           }).encode()
 
           req = urllib.request.Request(

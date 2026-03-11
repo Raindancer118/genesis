@@ -125,24 +125,23 @@ main() {
     version="$(echo "${url}" | grep -oP 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
     info "Latest version: ${version:-unknown}"
 
-    local tmp_dir
-    tmp_dir="$(mktemp -d)"
-    trap 'rm -rf "${tmp_dir}"' EXIT
+    TMP_DIR="$(mktemp -d)"
+    trap 'rm -rf "${TMP_DIR}"' EXIT
 
     info "Downloading ${artifact}.tar.gz..."
-    download "${url}" "${tmp_dir}/${artifact}.tar.gz"
+    download "${url}" "${TMP_DIR}/${artifact}.tar.gz"
 
     info "Extracting..."
-    tar -xzf "${tmp_dir}/${artifact}.tar.gz" -C "${tmp_dir}"
+    tar -xzf "${TMP_DIR}/${artifact}.tar.gz" -C "${TMP_DIR}"
 
     info "Installing to ${INSTALL_DIR}/${BIN_NAME}..."
     if [[ -w "${INSTALL_DIR}" ]]; then
-        cp "${tmp_dir}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
+        cp "${TMP_DIR}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
         chmod +x "${INSTALL_DIR}/${BIN_NAME}"
     else
         # Need sudo — ask once
         echo -e "  ${DIM}(sudo required to write to ${INSTALL_DIR})${RESET}"
-        sudo cp "${tmp_dir}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
+        sudo cp "${TMP_DIR}/${BIN_NAME}" "${INSTALL_DIR}/${BIN_NAME}"
         sudo chmod +x "${INSTALL_DIR}/${BIN_NAME}"
     fi
 

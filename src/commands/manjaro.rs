@@ -1,6 +1,6 @@
 use crate::ui;
 use anyhow::{anyhow, Context, Result};
-use inquire::{Confirm, Select};
+use inquire::{Confirm, Select, Text};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::Command;
@@ -325,6 +325,83 @@ fn copy_iso_to_ventoy(iso_path: &PathBuf, device: &str) -> Result<()> {
     Ok(())
 }
 
+// ── ISO source (auto-resolved or user-supplied) ───────────────────────────────
+
+enum IsoSource {
+    /// User provided a URL — we need to download the file.
+    Url { name: String, url: String },
+    /// User pointed to a file already on disk — skip download.
+    LocalFile(PathBuf),
+}
+
+/// Called when automatic discovery fails. Asks the user to either paste a
+/// download URL or pick / type a local .iso file path.
+fn ask_iso_manually() -> Result<IsoSource> {
+    println!();
+    ui::skip("Automatic ISO discovery failed.");
+    println!("  You can provide the ISO yourself:");
+
+    const OPT_URL: &str = "Paste a download URL";
+    const OPT_FILE: &str = "Select / enter a local .iso file";
+
+    let choice = Select::new("How do you want to supply the ISO?", vec![OPT_URL, OPT_FILE])
+        .prompt()?;
+
+    if choice == OPT_URL {
+        let url = Text::new("Paste the Manjaro KDE ISO download URL:")
+            .prompt()?;
+        let url = url.trim().to_string();
+        if url.is_empty() {
+            return Err(anyhow!("No URL entered."));
+        }
+        let name = url
+            .split('/')
+            .last()
+            .unwrap_or("manjaro-kde.iso")
+            .to_string();
+        return Ok(IsoSource::Url { name, url });
+    }
+
+    // ── Local file ───────────────────────────────────────────────────────────
+    // Scan common directories for .iso files and offer them as quick picks.
+    let search_dirs = [
+        dirs::download_dir().unwrap_or_else(|| PathBuf::from("~/Downloads")),
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from("~")),
+        PathBuf::from("/tmp"),
+    ];
+
+    let mut found: Vec<String> = Vec::new();
+    for dir in &search_dirs {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("iso") {
+                    found.push(path.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    found.sort();
+
+    const MANUAL_ENTRY: &str = "Enter path manually…";
+    let mut options = found.clone();
+    options.push(MANUAL_ENTRY.to_string());
+
+    let pick = Select::new("Select an ISO file:", options).prompt()?;
+
+    let path_str = if pick == MANUAL_ENTRY {
+        Text::new("Enter the full path to the .iso file:").prompt()?
+    } else {
+        pick
+    };
+
+    let path = PathBuf::from(path_str.trim());
+    if !path.exists() {
+        return Err(anyhow!("File not found: {}", path.display()));
+    }
+    Ok(IsoSource::LocalFile(path))
+}
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 pub fn run() -> Result<()> {
@@ -335,11 +412,14 @@ pub fn run() -> Result<()> {
     ui::section("Resolving latest Manjaro KDE ISO");
     ui::skip("Querying manjaro.org...");
 
-    let (iso_name, iso_url) = fetch_latest_iso_info()
-        .context("Could not determine the current Manjaro KDE ISO download URL")?;
-
-    ui::success(&format!("Latest ISO: {}", iso_name));
-    ui::info_line("Download", &iso_url);
+    let iso_source = match fetch_latest_iso_info() {
+        Ok((name, url)) => {
+            ui::success(&format!("Latest ISO: {}", name));
+            ui::info_line("Download", &url);
+            IsoSource::Url { name, url }
+        }
+        Err(_) => ask_iso_manually()?,
+    };
 
     // ── 2. Detect USB drives ─────────────────────────────────────────────────
     ui::section("Detecting USB drives");
@@ -381,28 +461,37 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    // ── 5. Download ISO ──────────────────────────────────────────────────────
-    ui::section("Downloading Manjaro KDE ISO");
-
-    let download_dir = dirs::download_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-    let iso_path = download_dir.join(&iso_name);
-
-    if iso_path.exists() {
-        ui::info_line("Found", iso_path.to_str().unwrap_or("?"));
-        let reuse = Confirm::new("ISO already exists in ~/Downloads. Skip download?")
-            .with_default(true)
-            .prompt()?;
-        if !reuse {
-            std::fs::remove_file(&iso_path).context("Failed to remove existing ISO")?;
-            download_iso(&iso_url, &iso_path)?;
-        } else {
-            ui::success("Using existing ISO file.");
+    // ── 5. Obtain ISO path (download or use local) ───────────────────────────
+    let iso_path = match iso_source {
+        IsoSource::LocalFile(path) => {
+            ui::section("Using local ISO");
+            ui::info_line("File", path.to_str().unwrap_or("?"));
+            path
         }
-    } else {
-        ui::info_line("Saving to", iso_path.to_str().unwrap_or("?"));
-        download_iso(&iso_url, &iso_path)?;
-        ui::success("Download complete.");
-    }
+        IsoSource::Url { name, url } => {
+            ui::section("Downloading Manjaro KDE ISO");
+            let download_dir = dirs::download_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+            let dest = download_dir.join(&name);
+
+            if dest.exists() {
+                    ui::info_line("Found", dest.to_str().unwrap_or("?"));
+                    let reuse = Confirm::new("ISO already exists in ~/Downloads. Skip download?")
+                        .with_default(true)
+                        .prompt()?;
+                    if !reuse {
+                        std::fs::remove_file(&dest).context("Failed to remove existing ISO")?;
+                        download_iso(&url, &dest)?;
+                    } else {
+                        ui::success("Using existing ISO file.");
+                    }
+                } else {
+                    ui::info_line("Saving to", dest.to_str().unwrap_or("?"));
+                    download_iso(&url, &dest)?;
+                    ui::success("Download complete.");
+                }
+            dest
+        }
+    };
 
     // ── 6. Install Ventoy ────────────────────────────────────────────────────
     ui::section("Installing Ventoy");

@@ -1,6 +1,6 @@
 [package]
 name = "volantic-genesis"
-version = "3.2.7"
+version = "3.2.8"
 edition = "2021"
 authors = ["Volantic Team"]
 description = "Volantic Genesis — Fast, focused system CLI"
@@ -40,3 +40,4 @@ reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"], def
 sha2 = "0.10"
 hex = "0.4"
 tempfile = "3"
+libc = "0.2"

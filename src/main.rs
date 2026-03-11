@@ -53,6 +53,9 @@ enum Commands {
         info: bool,
         #[arg(short, long)]
         paths: Vec<String>,
+        /// Run silently as a background job (used internally by auto-index)
+        #[arg(long, hide = true)]
+        background: bool,
     },
     /// Daily greeting
     Greet,
@@ -81,6 +84,38 @@ async fn main() -> Result<()> {
 
     // Fire analytics ping in background (non-blocking, daily max)
     analytics::maybe_ping(&config_manager);
+
+    // Auto-index: spawn a background re-index if the interval has elapsed.
+    // Skip if the current command IS already an index job (avoid recursion).
+    let is_index_cmd = matches!(&cli.command, Commands::Index { .. });
+    if !is_index_cmd {
+        let ai = &config_manager.config.auto_index;
+        let elapsed = config::ConfigManager::seconds_since_last_auto_index();
+        if ai.enabled && elapsed >= ai.interval_minutes * 60 {
+            // Stamp immediately so concurrent vg invocations don't all spawn at once.
+            config::ConfigManager::touch_auto_index_stamp();
+            if let Ok(exe) = std::env::current_exe() {
+                let paths: Vec<String> = if ai.paths.is_empty() {
+                    config_manager.config.search.default_paths.clone()
+                } else {
+                    ai.paths.clone()
+                };
+                let mut cmd = std::process::Command::new(exe);
+                cmd.arg("index").arg("--background");
+                for p in &paths { cmd.arg("--paths").arg(p); }
+                cmd.stdout(std::process::Stdio::null())
+                   .stderr(std::process::Stdio::null())
+                   .stdin(std::process::Stdio::null());
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::CommandExt;
+                    // Detach from process group so it survives terminal close
+                    unsafe { cmd.pre_exec(|| { libc::setsid(); Ok(()) }); }
+                }
+                let _ = cmd.spawn();
+            }
+        }
+    }
 
     // Track command
     let cmd_name = match &cli.command {
@@ -115,7 +150,7 @@ async fn main() -> Result<()> {
                 limit,
             }, &config_manager)?;
         }
-        Commands::Index { info, paths } => {
+        Commands::Index { info, paths, background } => {
             if info {
                 commands::search::info()?;
             } else {
@@ -126,7 +161,12 @@ async fn main() -> Result<()> {
                 } else {
                     paths.iter().map(|p| std::path::PathBuf::from(p)).collect()
                 };
+                // In background mode the parent already redirected stdio to null,
+                // so build_index output is invisible. Stamp on success.
                 commands::search::build_index(paths_to_index, &config_manager)?;
+                if background {
+                    config::ConfigManager::touch_auto_index_stamp();
+                }
             }
         }
         Commands::Greet => {

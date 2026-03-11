@@ -12,6 +12,29 @@ pub struct Config {
     pub system: SystemConfig,
     #[serde(default)]
     pub analytics: AnalyticsConfig,
+    #[serde(default)]
+    pub auto_index: AutoIndexConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct AutoIndexConfig {
+    /// Run a background re-index job automatically
+    pub enabled: bool,
+    /// How often to re-index (minutes). Default: 120 (2 hours)
+    pub interval_minutes: u64,
+    /// Paths to index. Empty = use search.default_paths
+    pub paths: Vec<String>,
+}
+
+impl Default for AutoIndexConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_minutes: 120,
+            paths: vec![],
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -144,5 +167,42 @@ impl ConfigManager {
 
     pub fn config_path(&self) -> &Path {
         &self.config_path
+    }
+
+    /// Path to the auto-index timestamp file.
+    pub fn auto_index_stamp_path() -> PathBuf {
+        let base = if let Some(proj) = ProjectDirs::from("", "volantic", "genesis") {
+            proj.data_local_dir().to_path_buf()
+        } else {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".local").join("share").join("volantic-genesis")
+        };
+        base.join("last_auto_index")
+    }
+
+    /// Seconds since the last auto-index completed. Returns `u64::MAX` if never run.
+    pub fn seconds_since_last_auto_index() -> u64 {
+        let stamp = Self::auto_index_stamp_path();
+        let Ok(content) = fs::read_to_string(&stamp) else { return u64::MAX };
+        let Ok(ts) = content.trim().parse::<u64>() else { return u64::MAX };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        now.saturating_sub(ts)
+    }
+
+    /// Write the current time as the last auto-index stamp.
+    pub fn touch_auto_index_stamp() {
+        let stamp = Self::auto_index_stamp_path();
+        if let Some(parent) = stamp.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = fs::write(&stamp, now.to_string());
     }
 }

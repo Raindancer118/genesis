@@ -90,7 +90,7 @@ vg config edit              # interactive editor
 | `search.exclude_hidden` | `true` | Skip hidden files/dirs |
 | `search.fuzzy_threshold` | `2` | Edit distance for fuzzy search |
 | `system.auto_confirm_update` | `false` | Skip prompts during `vg update` |
-| `analytics.enabled` | `false` | Send anonymous daily ping |
+| `analytics.enabled` | `true` | Send anonymous daily ping |
 | `analytics.track_commands` | `false` | Include command name in ping |
 
 Config file: `~/.config/volantic/genesis/config.toml`
@@ -99,11 +99,11 @@ Config file: `~/.config/volantic/genesis/config.toml`
 
 ## Analytics
 
-`vg` can send an anonymous daily ping to `analytics.volantic.de` — **disabled by default**.
+`vg` sends an anonymous daily ping to `analytics.volantic.de` — **enabled by default**.
 
-To opt in:
+To opt out:
 ```bash
-vg config set analytics.enabled true
+vg config set analytics.enabled false
 ```
 
 What is sent:

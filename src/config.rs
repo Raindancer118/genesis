@@ -80,7 +80,7 @@ pub struct AnalyticsConfig {
 impl Default for AnalyticsConfig {
     fn default() -> Self {
         Self {
-            enabled: false, // opt-in by default
+            enabled: true,
             track_commands: false,
             client_id: String::new(), // generated on first run
         }

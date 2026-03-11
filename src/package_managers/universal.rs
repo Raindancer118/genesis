@@ -1,4 +1,4 @@
-use super::{PackageManager, PmPackage, is_available, run_cmd, run_cmd_quiet};
+use super::{PackageManager, PmPackage, PmUpdate, is_available, run_cmd, run_cmd_quiet};
 use anyhow::Result;
 use std::process::Command;
 
@@ -12,6 +12,27 @@ impl PackageManager for Flatpak {
 
     fn update(&self, _yes: bool) -> Result<()> {
         run_cmd_quiet(&["flatpak", "update", "-y"], false)
+    }
+
+    fn list_updates(&self) -> Vec<PmUpdate> {
+        // flatpak remote-ls --updates: tab-separated application, installed-version, latest-version
+        let Ok(out) = Command::new("flatpak")
+            .args(["remote-ls", "--updates", "--columns=application,installed-version,version"])
+            .output() else { return vec![] };
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| {
+                let cols: Vec<&str> = line.splitn(3, '\t').collect();
+                if cols.len() >= 3 {
+                    let name = cols[0].trim().to_string();
+                    let old  = cols[1].trim().to_string();
+                    let new  = cols[2].trim().to_string();
+                    if !name.is_empty() { Some((name, old, new)) } else { None }
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {
@@ -51,6 +72,26 @@ impl PackageManager for Snap {
 
     fn update(&self, _yes: bool) -> Result<()> {
         run_cmd_quiet(&["snap", "refresh"], true)
+    }
+
+    fn list_updates(&self) -> Vec<PmUpdate> {
+        // snap refresh --list: "Name  Version  Rev  Size  Publisher  Notes"
+        let Ok(out) = Command::new("snap").args(["refresh", "--list"]).output() else { return vec![] };
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .skip(1) // header row
+            .filter_map(|line| {
+                let cols: Vec<&str> = line.split_whitespace().collect();
+                if cols.len() >= 2 {
+                    // snap doesn't expose old version here; show installed as old
+                    let name = cols[0].to_string();
+                    let new  = cols[1].to_string();
+                    Some((name, String::from("installed"), new))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {

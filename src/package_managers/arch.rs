@@ -19,17 +19,8 @@ impl PackageManager for Pamac {
     }
 
     fn list_updates(&self) -> Vec<PmUpdate> {
-        let Ok(out) = Command::new("pamac").args(["checkupdates"]).output() else { return vec![] };
-        let text = String::from_utf8_lossy(&out.stdout);
-        let mut updates = Vec::new();
-        for line in text.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            // Format: "name old_ver -> new_ver [repo]"
-            if parts.len() >= 4 && parts[2] == "->" {
-                updates.push((parts[0].to_string(), parts[1].to_string(), parts[3].to_string()));
-            }
-        }
-        updates
+        // pamac checkupdates: "name old_ver -> new_ver [repo]"
+        parse_qu_output(Command::new("pamac").args(["checkupdates"]).output().ok())
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {
@@ -73,6 +64,10 @@ impl PackageManager for Yay {
         run_cmd_quiet(&["yay", "-Syu", "--noconfirm"], false)
     }
 
+    fn list_updates(&self) -> Vec<PmUpdate> {
+        parse_qu_output(Command::new("yay").args(["-Qu"]).output().ok())
+    }
+
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {
         let output = Command::new("yay").args(["-Ss", query]).output()?;
         parse_pacman_search(&String::from_utf8_lossy(&output.stdout), "yay")
@@ -96,6 +91,10 @@ impl PackageManager for Paru {
 
     fn update(&self, _yes: bool) -> Result<()> {
         run_cmd_quiet(&["paru", "-Syu", "--noconfirm"], false)
+    }
+
+    fn list_updates(&self) -> Vec<PmUpdate> {
+        parse_qu_output(Command::new("paru").args(["-Qu"]).output().ok())
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {
@@ -124,6 +123,10 @@ impl PackageManager for Pacman {
         run_cmd_quiet(&["pacman", "-Syu", "--noconfirm"], true)
     }
 
+    fn list_updates(&self) -> Vec<PmUpdate> {
+        parse_qu_output(Command::new("pacman").args(["-Qu"]).output().ok())
+    }
+
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {
         let output = Command::new("pacman").args(["-Ss", query]).output()?;
         parse_pacman_search(&String::from_utf8_lossy(&output.stdout), "pacman")
@@ -138,6 +141,22 @@ impl PackageManager for Pacman {
     fn uninstall(&self, pkg: &str) -> Result<()> {
         run_cmd(&["pacman", "-Rns", pkg, "--noconfirm"], true)
     }
+}
+
+/// Parse `name old_ver -> new_ver [extras]` lines from pacman/yay/paru/pamac -Qu output.
+pub fn parse_qu_output(out: Option<std::process::Output>) -> Vec<PmUpdate> {
+    let Some(out) = out else { return vec![] };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let p: Vec<&str> = line.split_whitespace().collect();
+            if p.len() >= 4 && p[2] == "->" {
+                Some((p[0].to_string(), p[1].to_string(), p[3].to_string()))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 pub fn parse_pacman_search(output: &str, source: &str) -> Result<Vec<PmPackage>> {

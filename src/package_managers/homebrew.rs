@@ -1,4 +1,4 @@
-use super::{PackageManager, PmPackage, is_available, run_cmd, run_cmd_quiet};
+use super::{PackageManager, PmPackage, PmUpdate, is_available, run_cmd, run_cmd_quiet};
 use anyhow::Result;
 use std::process::Command;
 
@@ -12,6 +12,30 @@ impl PackageManager for Brew {
     fn update(&self, _yes: bool) -> Result<()> {
         run_cmd_quiet(&["brew", "update"], false)?;
         run_cmd_quiet(&["brew", "upgrade"], false)
+    }
+
+    fn list_updates(&self) -> Vec<PmUpdate> {
+        // brew fetch index first, then list outdated as JSON
+        let _ = Command::new("brew").args(["update", "--quiet"]).output();
+        let Ok(out) = Command::new("brew").args(["outdated", "--json=v2"]).output() else { return vec![] };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else { return vec![] };
+        let mut updates = Vec::new();
+        for category in &["formulae", "casks"] {
+            if let Some(arr) = json[category].as_array() {
+                for item in arr {
+                    let name = item["name"].as_str().unwrap_or("?").to_string();
+                    let installed = item["installed_versions"]
+                        .as_array()
+                        .and_then(|v| v.last())
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?").to_string();
+                    let latest = item["current_version"].as_str().unwrap_or("?").to_string();
+                    updates.push((name, installed, latest));
+                }
+            }
+        }
+        updates
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {

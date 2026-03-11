@@ -1,4 +1,4 @@
-use super::{PackageManager, PmPackage, is_available, run_cmd, run_cmd_quiet};
+use super::{PackageManager, PmPackage, PmUpdate, is_available, run_cmd, run_cmd_quiet};
 use anyhow::Result;
 use std::process::Command;
 
@@ -13,6 +13,24 @@ impl PackageManager for Apt {
     fn update(&self, _yes: bool) -> Result<()> {
         run_cmd_quiet(&["apt", "update"], true)?;
         run_cmd_quiet(&["apt", "upgrade", "-y"], true)
+    }
+
+    fn list_updates(&self) -> Vec<PmUpdate> {
+        // Refresh index silently first, then list upgradable
+        let _ = Command::new("sudo").args(["apt", "update", "-qq"]).output();
+        let Ok(out) = Command::new("apt").args(["list", "--upgradable"]).output() else { return vec![] };
+        // Format: "name/release new_ver arch [upgradable from: old_ver]"
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| {
+                if !line.contains("[upgradable from:") { return None; }
+                let name = line.split('/').next()?.trim().to_string();
+                let new_ver = line.split_whitespace().nth(1)?.to_string();
+                let old_ver = line.split("upgradable from: ")
+                    .nth(1)?.trim_end_matches(']').trim().to_string();
+                Some((name, old_ver, new_ver))
+            })
+            .collect()
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {

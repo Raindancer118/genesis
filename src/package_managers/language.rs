@@ -1,4 +1,4 @@
-use super::{PackageManager, PmPackage, is_available, run_cmd, run_cmd_quiet};
+use super::{PackageManager, PmPackage, PmUpdate, is_available, run_cmd, run_cmd_quiet};
 use anyhow::Result;
 use std::process::Command;
 
@@ -17,6 +17,25 @@ impl PackageManager for Cargo {
         } else {
             Ok(())
         }
+    }
+
+    fn list_updates(&self) -> Vec<PmUpdate> {
+        if !is_available("cargo-install-update") { return vec![]; }
+        // cargo install-update -l: "Package  Installed  Latest  Needs update"
+        let Ok(out) = Command::new("cargo").args(["install-update", "-l"]).output() else { return vec![] };
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .skip(2) // two header lines
+            .filter_map(|line| {
+                let cols: Vec<&str> = line.split_whitespace().collect();
+                // cols: name, installed, latest, "Yes"/"No"
+                if cols.len() >= 4 && cols[3].eq_ignore_ascii_case("yes") {
+                    Some((cols[0].to_string(), cols[1].to_string(), cols[2].to_string()))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {
@@ -58,6 +77,26 @@ impl PackageManager for Npm {
 
     fn update(&self, _yes: bool) -> Result<()> {
         run_cmd_quiet(&["npm", "update", "-g"], false)
+    }
+
+    fn list_updates(&self) -> Vec<PmUpdate> {
+        // npm outdated -g --json: {"pkg": {"current": "x", "latest": "y"}}
+        let Ok(out) = Command::new("npm").args(["outdated", "-g", "--json"]).output() else { return vec![] };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else { return vec![] };
+        json.as_object()
+            .map(|map| {
+                map.iter().filter_map(|(name, info)| {
+                    let current = info["current"].as_str().unwrap_or("?").to_string();
+                    let latest  = info["latest"].as_str().unwrap_or("?").to_string();
+                    if current != latest {
+                        Some((name.clone(), current, latest))
+                    } else {
+                        None
+                    }
+                }).collect()
+            })
+            .unwrap_or_default()
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {

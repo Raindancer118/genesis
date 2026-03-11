@@ -29,6 +29,11 @@ pub trait PackageManager: Send + Sync {
     fn needs_sudo(&self) -> bool { false }
     /// Return pending updates without applying them. Empty = unsupported or none.
     fn list_updates(&self) -> Vec<PmUpdate> { vec![] }
+    /// Run the update, calling `on_pkg_done(name)` whenever a single package finishes.
+    /// Default: delegate to `update()` (spinner-only, no per-package callbacks).
+    fn update_streaming(&self, yes: bool, _on_pkg_done: &mut dyn FnMut(&str)) -> Result<()> {
+        self.update(yes)
+    }
 }
 
 pub fn get_all_managers() -> Vec<Box<dyn PackageManager>> {

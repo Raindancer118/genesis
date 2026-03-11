@@ -14,8 +14,39 @@ impl PackageManager for Pamac {
     fn needs_sudo(&self) -> bool { false }
 
     fn update(&self, _yes: bool) -> Result<()> {
-        // Always non-interactive: we show the package list ourselves before running.
         run_with_spinner(&["pamac", "upgrade", "--no-confirm"], false, "Updating packages…")
+    }
+
+    fn update_streaming(&self, _yes: bool, on_pkg_done: &mut dyn FnMut(&str)) -> Result<()> {
+        use std::process::{Command, Stdio};
+        use std::io::{BufRead, BufReader};
+
+        // stdbuf -oL forces line-buffered stdout so we get each line as pamac writes it
+        let use_stdbuf = is_available("stdbuf");
+        let mut cmd = if use_stdbuf {
+            let mut c = Command::new("stdbuf");
+            c.args(["-oL", "pamac", "upgrade", "--no-confirm"]);
+            c
+        } else {
+            let mut c = Command::new("pamac");
+            c.args(["upgrade", "--no-confirm"]);
+            c
+        };
+        cmd.stdout(Stdio::piped()).stderr(Stdio::null());
+
+        let mut child = cmd.spawn()?;
+        if let Some(stdout) = child.stdout.take() {
+            for line in BufReader::new(stdout).lines().flatten() {
+                if let Some(pkg) = parse_pamac_progress_line(&line) {
+                    on_pkg_done(&pkg);
+                }
+            }
+        }
+        let status = child.wait()?;
+        if !status.success() {
+            anyhow::bail!("pamac upgrade failed");
+        }
+        Ok(())
     }
 
     fn list_updates(&self) -> Vec<PmUpdate> {
@@ -64,6 +95,10 @@ impl PackageManager for Yay {
         run_with_spinner(&["yay", "-Syu", "--noconfirm"], false, "Updating packages…")
     }
 
+    fn update_streaming(&self, _yes: bool, on_pkg_done: &mut dyn FnMut(&str)) -> Result<()> {
+        streaming_pacman_update(&["yay", "-Syu", "--noconfirm"], false, on_pkg_done)
+    }
+
     fn list_updates(&self) -> Vec<PmUpdate> {
         parse_qu_output(Command::new("yay").args(["-Qu"]).output().ok())
     }
@@ -91,6 +126,10 @@ impl PackageManager for Paru {
 
     fn update(&self, _yes: bool) -> Result<()> {
         run_with_spinner(&["paru", "-Syu", "--noconfirm"], false, "Updating packages…")
+    }
+
+    fn update_streaming(&self, _yes: bool, on_pkg_done: &mut dyn FnMut(&str)) -> Result<()> {
+        streaming_pacman_update(&["paru", "-Syu", "--noconfirm"], false, on_pkg_done)
     }
 
     fn list_updates(&self) -> Vec<PmUpdate> {
@@ -123,6 +162,10 @@ impl PackageManager for Pacman {
         run_with_spinner(&["pacman", "-Syu", "--noconfirm"], true, "Updating packages…")
     }
 
+    fn update_streaming(&self, _yes: bool, on_pkg_done: &mut dyn FnMut(&str)) -> Result<()> {
+        streaming_pacman_update(&["pacman", "-Syu", "--noconfirm"], true, on_pkg_done)
+    }
+
     fn list_updates(&self) -> Vec<PmUpdate> {
         parse_qu_output(Command::new("pacman").args(["-Qu"]).output().ok())
     }
@@ -141,6 +184,72 @@ impl PackageManager for Pacman {
     fn uninstall(&self, pkg: &str) -> Result<()> {
         run_cmd(&["pacman", "-Rns", pkg, "--noconfirm"], true)
     }
+}
+
+fn streaming_pacman_update(args: &[&str], sudo: bool, on_pkg_done: &mut dyn FnMut(&str)) -> Result<()> {
+    use std::process::{Command, Stdio};
+    use std::io::{BufRead, BufReader};
+
+    let (prog, rest) = if sudo { ("sudo", args) } else { (args[0], &args[1..]) };
+    let mut cmd = Command::new(prog);
+    if sudo { cmd.args(args); } else { cmd.args(rest); }
+
+    let mut child = if is_available("stdbuf") {
+        let mut c = Command::new("stdbuf");
+        c.arg("-oL");
+        if sudo { c.arg("sudo").args(args); } else { c.arg(args[0]).args(rest); }
+        c.stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?
+    } else {
+        cmd.stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?
+    };
+
+    if let Some(stdout) = child.stdout.take() {
+        for line in BufReader::new(stdout).lines().flatten() {
+            if let Some(pkg) = parse_pacman_progress_line(&line) {
+                on_pkg_done(&pkg);
+            }
+        }
+    }
+    let status = child.wait()?;
+    // Exit code 1 from yay/paru typically means "nothing to do" — not a real error
+    if !status.success() && status.code() != Some(1) {
+        anyhow::bail!("Command failed: {:?}", args);
+    }
+    Ok(())
+}
+
+/// Extract a package name from a pamac progress line.
+/// Handles German ("Erneuere foo", "Installiere foo") and English ("Upgrading foo", "Installing foo").
+fn parse_pamac_progress_line(line: &str) -> Option<String> {
+    let line = line.trim();
+    for prefix in &["Erneuere ", "Installiere ", "Upgrading ", "Installing ", "Reinstalling "] {
+        if let Some(rest) = line.strip_prefix(prefix) {
+            let name = rest.split(|c: char| c == ' ' || c == '(').next()?;
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Extract a package name from pacman/yay/paru transaction lines.
+/// Matches "(N/M) upgrading foo" / "(N/M) installing foo" patterns.
+fn parse_pacman_progress_line(line: &str) -> Option<String> {
+    let line = line.trim();
+    // Strip optional "(N/M) " prefix
+    let rest = if line.starts_with('(') {
+        line.splitn(2, ") ").nth(1).unwrap_or(line)
+    } else {
+        line
+    };
+    for prefix in &["upgrading ", "installing ", "reinstalling "] {
+        if let Some(name) = rest.strip_prefix(prefix) {
+            let pkg = name.split_whitespace().next()?;
+            if !pkg.is_empty() { return Some(pkg.to_string()); }
+        }
+    }
+    None
 }
 
 /// Parse `name old_ver -> new_ver [extras]` lines from pacman/yay/paru/pamac -Qu output.

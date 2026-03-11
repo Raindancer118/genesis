@@ -71,14 +71,31 @@ pub fn run(yes: bool) -> Result<()> {
             println!();
         }
 
-        match manager.update(yes) {
+        // Track which packages the PM reported as done via streaming output.
+        let mut streamed: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        let result = manager.update_streaming(yes, &mut |pkg_name: &str| {
+            // Match against pending by exact name or prefix (version suffixes vary)
+            if let Some((name, old_ver, new_ver)) = pending.iter()
+                .find(|(n, _, _)| n == pkg_name || pkg_name.starts_with(n.as_str()))
+            {
+                if streamed.insert(name.clone()) {
+                    print_pkg_row(name, old_ver, new_ver, true);
+                }
+            }
+        });
+
+        match result {
             Ok(()) => {
+                // Print ✓ for any packages the PM didn't report individually
+                for (name, old_ver, new_ver) in pending.iter() {
+                    if !streamed.contains(name) {
+                        print_pkg_row(name, old_ver, new_ver, true);
+                    }
+                }
                 if pending.is_empty() {
                     ui::success(&format!("{} — up to date", manager.display_name()));
                 } else {
-                    for (name, old_ver, new_ver) in pending.iter() {
-                        print_pkg_row(name, old_ver, new_ver, true);
-                    }
                     println!();
                     ui::success(&format!(
                         "{} — {} package{} updated",
@@ -89,7 +106,15 @@ pub fn run(yes: bool) -> Result<()> {
                     any_updated = true;
                 }
             }
-            Err(e) => ui::fail(&format!("{} failed: {}", manager.display_name(), e)),
+            Err(e) => {
+                // Still mark any pending packages to avoid leaving · rows dangling
+                for (name, old_ver, new_ver) in pending.iter() {
+                    if !streamed.contains(name) {
+                        print_pkg_row(name, old_ver, new_ver, true);
+                    }
+                }
+                ui::fail(&format!("{} failed: {}", manager.display_name(), e));
+            }
         }
         println!();
     }

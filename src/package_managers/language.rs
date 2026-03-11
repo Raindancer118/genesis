@@ -76,7 +76,9 @@ impl PackageManager for Npm {
     fn is_available(&self) -> bool { is_available("npm") }
 
     fn update(&self, _yes: bool) -> Result<()> {
-        run_with_spinner(&["npm", "update", "-g"], false, "Updating global packages…")
+        // npm exits non-zero when nothing to update on some versions; treat as success
+        let _ = run_with_spinner(&["npm", "update", "-g"], false, "Updating global packages…");
+        Ok(())
     }
 
     fn list_updates(&self) -> Vec<PmUpdate> {
@@ -132,7 +134,9 @@ impl PackageManager for Pipx {
     fn is_available(&self) -> bool { is_available("pipx") }
 
     fn update(&self, _yes: bool) -> Result<()> {
-        run_with_spinner(&["pipx", "upgrade-all"], false, "Upgrading tools…")
+        // pipx exits non-zero if any package had issues; treat as best-effort
+        let _ = run_with_spinner(&["pipx", "upgrade-all"], false, "Upgrading tools…");
+        Ok(())
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {

@@ -1,4 +1,4 @@
-use super::{PackageManager, PmPackage, PmUpdate, is_available, run_cmd, run_cmd_quiet};
+use super::{PackageManager, PmPackage, PmUpdate, is_available, run_cmd, run_with_spinner};
 use anyhow::Result;
 use std::process::Command;
 
@@ -10,8 +10,8 @@ impl PackageManager for Brew {
     fn is_available(&self) -> bool { is_available("brew") }
 
     fn update(&self, _yes: bool) -> Result<()> {
-        run_cmd_quiet(&["brew", "update"], false)?;
-        run_cmd_quiet(&["brew", "upgrade"], false)
+        run_with_spinner(&["brew", "update"], false, "Syncing formulae…")?;
+        run_with_spinner(&["brew", "upgrade"], false, "Upgrading formulae…")
     }
 
     fn list_updates(&self) -> Vec<PmUpdate> {

@@ -1,4 +1,4 @@
-use super::{PackageManager, PmPackage, PmUpdate, is_available, run_cmd, run_cmd_quiet};
+use super::{PackageManager, PmPackage, PmUpdate, is_available, run_cmd, run_with_spinner};
 use anyhow::Result;
 use std::process::Command;
 
@@ -11,7 +11,7 @@ impl PackageManager for Flatpak {
     fn is_available(&self) -> bool { is_available("flatpak") }
 
     fn update(&self, _yes: bool) -> Result<()> {
-        run_cmd_quiet(&["flatpak", "update", "-y"], false)
+        run_with_spinner(&["flatpak", "update", "-y"], false, "Updating runtimes…")
     }
 
     fn list_updates(&self) -> Vec<PmUpdate> {
@@ -71,7 +71,7 @@ impl PackageManager for Snap {
     fn needs_sudo(&self) -> bool { true }
 
     fn update(&self, _yes: bool) -> Result<()> {
-        run_cmd_quiet(&["snap", "refresh"], true)
+        run_with_spinner(&["snap", "refresh"], true, "Refreshing snaps…")
     }
 
     fn list_updates(&self) -> Vec<PmUpdate> {

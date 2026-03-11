@@ -1,4 +1,4 @@
-use super::{PackageManager, PmPackage, PmUpdate, is_available, run_cmd, run_cmd_quiet};
+use super::{PackageManager, PmPackage, PmUpdate, is_available, run_cmd, run_with_spinner};
 use anyhow::Result;
 use std::process::Command;
 
@@ -13,7 +13,7 @@ impl PackageManager for Cargo {
 
     fn update(&self, _yes: bool) -> Result<()> {
         if is_available("cargo-install-update") {
-            run_cmd_quiet(&["cargo", "install-update", "-a"], false)
+            run_with_spinner(&["cargo", "install-update", "-a"], false, "Updating crates…")
         } else {
             Ok(())
         }
@@ -76,7 +76,7 @@ impl PackageManager for Npm {
     fn is_available(&self) -> bool { is_available("npm") }
 
     fn update(&self, _yes: bool) -> Result<()> {
-        run_cmd_quiet(&["npm", "update", "-g"], false)
+        run_with_spinner(&["npm", "update", "-g"], false, "Updating global packages…")
     }
 
     fn list_updates(&self) -> Vec<PmUpdate> {
@@ -132,7 +132,7 @@ impl PackageManager for Pipx {
     fn is_available(&self) -> bool { is_available("pipx") }
 
     fn update(&self, _yes: bool) -> Result<()> {
-        run_cmd_quiet(&["pipx", "upgrade-all"], false)
+        run_with_spinner(&["pipx", "upgrade-all"], false, "Upgrading tools…")
     }
 
     fn search(&self, query: &str) -> Result<Vec<PmPackage>> {

@@ -1,4 +1,4 @@
-use super::{PackageManager, PmPackage, PmUpdate, is_available, run_cmd, run_cmd_quiet};
+use super::{PackageManager, PmPackage, PmUpdate, is_available, run_cmd, run_with_spinner};
 use anyhow::Result;
 use std::process::Command;
 
@@ -11,8 +11,8 @@ impl PackageManager for Apt {
     fn needs_sudo(&self) -> bool { true }
 
     fn update(&self, _yes: bool) -> Result<()> {
-        run_cmd_quiet(&["apt", "update"], true)?;
-        run_cmd_quiet(&["apt", "upgrade", "-y"], true)
+        run_with_spinner(&["apt", "update"], true, "Syncing package index…")?;
+        run_with_spinner(&["apt", "upgrade", "-y"], true, "Upgrading packages…")
     }
 
     fn list_updates(&self) -> Vec<PmUpdate> {

@@ -60,10 +60,49 @@ pub fn run_cmd(args: &[&str], sudo: bool) -> Result<()> {
     run_cmd_impl(args, sudo, false)
 }
 
-/// Run a command silently (stdout+stderr captured/discarded).
+/// Run a command silently (stdout+stderr discarded).
 /// stdin is inherited so TTY-based prompts (e.g. polkit password) still work.
 pub fn run_cmd_quiet(args: &[&str], sudo: bool) -> Result<()> {
-    run_cmd_impl(args, sudo, true)
+    run_cmd_impl(args, sudo, false)
+}
+
+/// Spawn `args` silently, show a spinner with `label` until it exits, then clear the line.
+pub fn run_with_spinner(args: &[&str], sudo: bool, label: &str) -> Result<()> {
+    use std::process::{Command, Stdio};
+    use std::io::Write;
+
+    let (prog, rest) = if sudo { ("sudo", args) } else { (args[0], &args[1..]) };
+    let mut cmd = Command::new(prog);
+    if sudo { cmd.args(args); } else { cmd.args(rest); }
+    cmd.stdout(Stdio::null()).stderr(Stdio::null());
+
+    let mut child = cmd.spawn()?;
+    let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let mut i = 0usize;
+
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                // Clear the spinner line
+                print!("\r\x1b[2K");
+                std::io::stdout().flush().ok();
+                if !status.success() {
+                    anyhow::bail!("Command failed: {:?}", args);
+                }
+                return Ok(());
+            }
+            None => {
+                print!(
+                    "\r  \x1b[38;2;96;165;250m{}\x1b[0m  \x1b[38;2;71;85;105m{}\x1b[0m",
+                    frames[i % frames.len()],
+                    label,
+                );
+                std::io::stdout().flush().ok();
+                i += 1;
+                std::thread::sleep(std::time::Duration::from_millis(80));
+            }
+        }
+    }
 }
 
 fn run_cmd_impl(args: &[&str], sudo: bool, quiet: bool) -> Result<()> {

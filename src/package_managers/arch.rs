@@ -1,4 +1,4 @@
-use super::{PackageManager, PmPackage, PmUpdate, is_available, run_cmd, run_cmd_quiet};
+use super::{PackageManager, PmPackage, PmUpdate, is_available, run_cmd, run_with_spinner};
 use anyhow::Result;
 use std::process::Command;
 
@@ -15,7 +15,7 @@ impl PackageManager for Pamac {
 
     fn update(&self, _yes: bool) -> Result<()> {
         // Always non-interactive: we show the package list ourselves before running.
-        run_cmd_quiet(&["pamac", "upgrade", "--no-confirm"], false)
+        run_with_spinner(&["pamac", "upgrade", "--no-confirm"], false, "Updating packages…")
     }
 
     fn list_updates(&self) -> Vec<PmUpdate> {
@@ -61,7 +61,7 @@ impl PackageManager for Yay {
     fn is_available(&self) -> bool { is_available("yay") }
 
     fn update(&self, _yes: bool) -> Result<()> {
-        run_cmd_quiet(&["yay", "-Syu", "--noconfirm"], false)
+        run_with_spinner(&["yay", "-Syu", "--noconfirm"], false, "Updating packages…")
     }
 
     fn list_updates(&self) -> Vec<PmUpdate> {
@@ -90,7 +90,7 @@ impl PackageManager for Paru {
     fn is_available(&self) -> bool { is_available("paru") }
 
     fn update(&self, _yes: bool) -> Result<()> {
-        run_cmd_quiet(&["paru", "-Syu", "--noconfirm"], false)
+        run_with_spinner(&["paru", "-Syu", "--noconfirm"], false, "Updating packages…")
     }
 
     fn list_updates(&self) -> Vec<PmUpdate> {
@@ -120,7 +120,7 @@ impl PackageManager for Pacman {
     fn needs_sudo(&self) -> bool { true }
 
     fn update(&self, _yes: bool) -> Result<()> {
-        run_cmd_quiet(&["pacman", "-Syu", "--noconfirm"], true)
+        run_with_spinner(&["pacman", "-Syu", "--noconfirm"], true, "Updating packages…")
     }
 
     fn list_updates(&self) -> Vec<PmUpdate> {

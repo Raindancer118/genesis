@@ -5,6 +5,7 @@ mod ui;
 mod config;
 mod package_managers;
 mod commands;
+mod analytics;
 
 #[derive(Parser, Debug)]
 #[command(name = "vg")]
@@ -20,34 +21,27 @@ struct Cli {
 enum Commands {
     /// Update all package managers
     Update {
-        /// Skip confirmation prompts
         #[arg(short, long)]
         yes: bool,
     },
     /// Search and install a package interactively
     Install {
-        /// Package name to search for
         pkg: String,
-        /// Skip confirmation prompts
         #[arg(short, long)]
         yes: bool,
     },
     /// Uninstall a package
     Uninstall {
-        /// Package name
         pkg: String,
     },
-    /// Lightning-fast file search
+    /// Lightning-fast file search (SQLite FTS5)
     Search {
-        /// Query string
         query: String,
     },
     /// Build or show file search index
     Index {
-        /// Display index information
         #[arg(short, long)]
         info: bool,
-        /// Paths to index
         #[arg(short, long)]
         paths: Vec<String>,
     },
@@ -60,12 +54,39 @@ enum Commands {
     /// Update Volantic Genesis itself
     #[command(name = "self-update")]
     SelfUpdate,
+    /// View or change settings
+    Config {
+        /// Action: list, get, set, edit
+        action: Option<String>,
+        /// Config key (e.g. search.max_results)
+        key: Option<String>,
+        /// Value to set
+        value: Option<String>,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let config_manager = config::ConfigManager::new();
+    let mut config_manager = config::ConfigManager::new();
+
+    // Fire analytics ping in background (non-blocking, daily max)
+    analytics::maybe_ping(&config_manager);
+
+    // Track command
+    let cmd_name = match &cli.command {
+        Commands::Update { .. } => "update",
+        Commands::Install { .. } => "install",
+        Commands::Uninstall { .. } => "uninstall",
+        Commands::Search { .. } => "search",
+        Commands::Index { .. } => "index",
+        Commands::Greet => "greet",
+        Commands::Health => "health",
+        Commands::Info => "info",
+        Commands::SelfUpdate => "self-update",
+        Commands::Config { .. } => "config",
+    };
+    analytics::track_command(&config_manager, cmd_name);
 
     match cli.command {
         Commands::Update { yes } => {
@@ -105,6 +126,9 @@ async fn main() -> Result<()> {
         }
         Commands::SelfUpdate => {
             commands::self_update::run()?;
+        }
+        Commands::Config { action, key, value } => {
+            commands::config_cmd::run(action, key, value, &mut config_manager)?;
         }
     }
 

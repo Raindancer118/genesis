@@ -5,3 +5,4 @@ pub mod greet;
 pub mod health;
 pub mod info;
 pub mod self_update;
+pub mod config_cmd;

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use directories::ProjectDirs;
 use anyhow::{Result, Context};
 
@@ -10,6 +10,8 @@ pub struct Config {
     pub search: SearchConfig,
     #[serde(default)]
     pub system: SystemConfig,
+    #[serde(default)]
+    pub analytics: AnalyticsConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -64,6 +66,27 @@ impl Default for SystemConfig {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct AnalyticsConfig {
+    /// Opt-in: send daily anonymous ping to analytics.volantic.de
+    pub enabled: bool,
+    /// Also track which commands are used (still anonymous)
+    pub track_commands: bool,
+    /// Anonymous client identifier (auto-generated SHA256 hash)
+    pub client_id: String,
+}
+
+impl Default for AnalyticsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false, // opt-in by default
+            track_commands: false,
+            client_id: String::new(), // generated on first run
+        }
+    }
+}
+
 pub struct ConfigManager {
     config_path: PathBuf,
     pub config: Config,
@@ -71,8 +94,26 @@ pub struct ConfigManager {
 
 impl ConfigManager {
     pub fn new() -> Self {
-        let (config_path, config) = Self::load_or_default();
+        let (config_path, mut config) = Self::load_or_default();
+        // Auto-generate client_id if missing
+        if config.analytics.client_id.is_empty() {
+            config.analytics.client_id = Self::generate_client_id();
+            // Save immediately so it persists
+            let mgr = ConfigManager { config_path: config_path.clone(), config: config.clone() };
+            let _ = mgr.save();
+        }
         Self { config_path, config }
+    }
+
+    fn generate_client_id() -> String {
+        use sha2::{Sha256, Digest};
+        let hostname = sysinfo::System::host_name().unwrap_or_else(|| "unknown".to_string());
+        let username = whoami::username();
+        let input = format!("{}:{}", hostname, username);
+        let mut hasher = Sha256::new();
+        hasher.update(input.as_bytes());
+        let result = hasher.finalize();
+        hex::encode(&result[..8])
     }
 
     fn load_or_default() -> (PathBuf, Config) {
@@ -99,5 +140,9 @@ impl ConfigManager {
         let content = toml::to_string_pretty(&self.config).context("Failed to serialize config")?;
         fs::write(&self.config_path, content).context("Failed to write config file")?;
         Ok(())
+    }
+
+    pub fn config_path(&self) -> &Path {
+        &self.config_path
     }
 }

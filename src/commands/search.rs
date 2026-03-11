@@ -122,8 +122,14 @@ pub fn build_index(paths: Vec<PathBuf>, config: &ConfigManager) -> Result<()> {
     )?;
 
     println!();
-    ui::success(&format!("Indexed {} files into SQLite FTS5", count));
-    ui::info_line("Database", &get_db_path().display().to_string());
+    if count == 0 {
+        ui::fail("No files indexed — all configured paths were missing or empty.");
+        ui::skip("Update your paths:  vg config edit");
+        ui::skip("Or specify directly: vg index --paths /home/you");
+    } else {
+        ui::success(&format!("Indexed {} files into SQLite FTS5", count));
+        ui::info_line("Database", &get_db_path().display().to_string());
+    }
     Ok(())
 }
 

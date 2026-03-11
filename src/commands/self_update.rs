@@ -1,68 +1,174 @@
 use crate::ui;
 use anyhow::{Result, Context, anyhow};
-use std::process::Command;
+use serde::Deserialize;
 use std::env;
-use std::path::Path;
+use std::fs;
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
+
+const REPO: &str = "Raindancer118/genesis";
+const API_URL: &str = "https://api.github.com/repos/Raindancer118/genesis/releases/latest";
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    assets: Vec<GithubAsset>,
+    body: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GithubAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+fn detect_artifact() -> &'static str {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    return "vg-x86_64-linux.tar.gz";
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    return "vg-aarch64-linux.tar.gz";
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    return "vg-x86_64-windows.zip";
+    #[allow(unreachable_code)]
+    "vg-x86_64-linux.tar.gz"
+}
+
+fn fetch_latest_release() -> Result<GithubRelease> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent("vg-self-update")
+        .build()?;
+
+    let release: GithubRelease = client
+        .get(API_URL)
+        .send()
+        .context("Failed to reach GitHub API")?
+        .json()
+        .context("Failed to parse release JSON")?;
+
+    Ok(release)
+}
+
+fn version_is_newer(latest: &str, current: &str) -> bool {
+    // Strip leading 'v'
+    let latest = latest.trim_start_matches('v');
+    let current = current.trim_start_matches('v');
+
+    let parse = |v: &str| -> (u32, u32, u32) {
+        let parts: Vec<u32> = v.split('.').filter_map(|p| p.parse().ok()).collect();
+        (
+            parts.first().copied().unwrap_or(0),
+            parts.get(1).copied().unwrap_or(0),
+            parts.get(2).copied().unwrap_or(0),
+        )
+    };
+
+    parse(latest) > parse(current)
+}
 
 pub fn run() -> Result<()> {
     ui::print_header("SELF UPDATE");
 
-    let exe_path = env::current_exe()?;
-    let exe_dir = exe_path.parent().context("Failed to get executable directory")?;
+    ui::info_line("Current version", &format!("v{}", CURRENT_VERSION));
+    ui::section("Checking for updates");
 
-    let project_root = if exe_dir.ends_with("release") && exe_dir.parent().map(|p| p.ends_with("target")).unwrap_or(false) {
-        exe_dir.parent().unwrap().parent().unwrap().to_path_buf()
-    } else {
-        Path::new("/opt/volantic-genesis").to_path_buf()
-    };
+    let release = fetch_latest_release().context("Could not fetch release info from GitHub")?;
+    let latest_version = &release.tag_name;
 
-    if !project_root.exists() || !project_root.join(".git").exists() {
-        return Err(anyhow!("Cannot locate Volantic Genesis repository at {:?}", project_root));
+    ui::info_line("Latest version", latest_version);
+
+    if !version_is_newer(latest_version, CURRENT_VERSION) {
+        println!();
+        ui::success("Already up to date.");
+        return Ok(());
     }
 
-    ui::info_line("Repository", &project_root.display().to_string());
+    ui::success(&format!("New version available: {}", latest_version));
 
-    ui::section("Pulling latest changes");
-    let status = Command::new("git").arg("pull").current_dir(&project_root).status().context("Failed to run git pull")?;
-    if !status.success() { return Err(anyhow!("git pull failed")); }
-    ui::success("Repository updated");
-
-    // Show changelog
-    let changelog_path = project_root.join("CHANGELOG.md");
-    if changelog_path.exists() {
-        ui::section("Changelog");
-        if let Ok(content) = std::fs::read_to_string(changelog_path) {
-            let mut printing = false;
-            let mut count = 0;
-            for line in content.lines() {
-                if line.starts_with("## [") {
-                    if printing { break; }
-                    printing = true;
-                    println!("  {}", line);
-                    continue;
-                }
-                if printing {
-                    println!("  {}", line);
-                    count += 1;
-                    if count > 15 { println!("  ..."); break; }
-                }
+    // Show release notes
+    if let Some(body) = &release.body {
+        let notes: String = body.lines().take(12).collect::<Vec<_>>().join("\n");
+        if !notes.trim().is_empty() {
+            ui::section("Release Notes");
+            for line in notes.lines() {
+                println!("  {}", line);
             }
         }
     }
 
-    ui::section("Rebuilding");
-    let cargo = if which::which("cargo").is_ok() { "cargo".to_string() }
-    else { format!("{}/.cargo/bin/cargo", env::var("HOME").unwrap_or_default()) };
+    // Find the right artifact
+    let artifact_name = detect_artifact();
+    let asset = release.assets.iter()
+        .find(|a| a.name == artifact_name)
+        .ok_or_else(|| anyhow!("No artifact '{}' found in release {}", artifact_name, latest_version))?;
 
-    let status = Command::new(&cargo)
-        .args(["build", "--release"])
-        .current_dir(&project_root)
-        .status()
-        .context("Failed to run cargo build")?;
+    ui::section(&format!("Downloading {}", artifact_name));
 
-    if !status.success() { return Err(anyhow!("Build failed")); }
+    // Download to temp file
+    let tmp_dir = tempfile::tempdir().context("Failed to create temp dir")?;
+    let archive_path = tmp_dir.path().join(artifact_name);
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .user_agent("vg-self-update")
+        .build()?;
+
+    let bytes = client
+        .get(&asset.browser_download_url)
+        .send()
+        .context("Download failed")?
+        .bytes()
+        .context("Failed to read download")?;
+
+    fs::write(&archive_path, &bytes).context("Failed to write archive")?;
+    ui::success(&format!("{:.1} MB downloaded", bytes.len() as f64 / 1_048_576.0));
+
+    // Extract
+    ui::section("Installing");
+    let bin_path = tmp_dir.path().join("vg");
+
+    if artifact_name.ends_with(".tar.gz") {
+        let status = std::process::Command::new("tar")
+            .args(["-xzf", archive_path.to_str().unwrap(), "-C", tmp_dir.path().to_str().unwrap()])
+            .status()
+            .context("Failed to run tar")?;
+        if !status.success() { return Err(anyhow!("tar extraction failed")); }
+    } else if artifact_name.ends_with(".zip") {
+        let status = std::process::Command::new("unzip")
+            .args(["-o", archive_path.to_str().unwrap(), "-d", tmp_dir.path().to_str().unwrap()])
+            .status()
+            .context("Failed to run unzip")?;
+        if !status.success() { return Err(anyhow!("unzip extraction failed")); }
+    }
+
+    // Replace current binary
+    let exe_path = env::current_exe().context("Cannot determine current executable path")?;
+
+    // Try direct copy first, fall back to sudo
+    let new_bin = if artifact_name.ends_with(".zip") {
+        tmp_dir.path().join("vg.exe")
+    } else {
+        bin_path
+    };
+
+    // Make executable
+    #[cfg(unix)]
+    fs::set_permissions(&new_bin, fs::Permissions::from_mode(0o755))
+        .context("Failed to set permissions")?;
+
+    let copy_result = fs::copy(&new_bin, &exe_path);
+    if copy_result.is_err() {
+        // Need elevated privileges
+        ui::skip("Needs elevated privileges to replace binary...");
+        let status = std::process::Command::new("sudo")
+            .args(["cp", new_bin.to_str().unwrap(), exe_path.to_str().unwrap()])
+            .status()
+            .context("sudo cp failed")?;
+        if !status.success() { return Err(anyhow!("Failed to replace binary")); }
+    }
 
     println!();
-    ui::success("Volantic Genesis updated. Please restart vg.");
+    ui::success(&format!("Updated to {} — restart vg to use the new version.", latest_version));
     Ok(())
 }

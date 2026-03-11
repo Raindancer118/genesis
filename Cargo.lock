@@ -2035,6 +2035,7 @@ dependencies = [
  "sha2",
  "shlex",
  "sysinfo",
+ "tempfile",
  "tokio",
  "toml",
  "uuid",

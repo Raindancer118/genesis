@@ -46,14 +46,20 @@ fn fetch_latest_release() -> Result<GithubRelease> {
         .user_agent("vg-self-update")
         .build()?;
 
-    let release: GithubRelease = client
+    let resp = client
         .get(API_URL)
         .send()
-        .context("Failed to reach GitHub API")?
-        .json()
-        .context("Failed to parse release JSON")?;
+        .context("Network unreachable — check your internet connection")?;
 
-    Ok(release)
+    match resp.status().as_u16() {
+        200 => {}
+        403 => return Err(anyhow!("GitHub API rate limit exceeded — try again in a few minutes")),
+        404 => return Err(anyhow!("No releases found on GitHub — the repository may not have published a release yet")),
+        500 | 502 | 503 | 504 => return Err(anyhow!("GitHub is currently unavailable ({})", resp.status())),
+        code => return Err(anyhow!("GitHub API returned unexpected status {}", code)),
+    }
+
+    resp.json().context("Failed to parse release JSON — the API response was malformed")
 }
 
 fn version_is_newer(latest: &str, current: &str) -> bool {
@@ -273,10 +279,33 @@ pub fn run() -> Result<()> {
     ui::info_line("Current version", &format!("v{}", CURRENT_VERSION));
     ui::section("Checking for updates");
 
-    let Some(info) = check() else {
+    let release = match fetch_latest_release() {
+        Ok(r) => r,
+        Err(e) => {
+            println!();
+            ui::fail(&e.to_string());
+            return Ok(());
+        }
+    };
+
+    if !version_is_newer(&release.tag_name, CURRENT_VERSION) {
         println!();
         ui::success("Already up to date.");
         return Ok(());
+    }
+
+    let artifact_name = detect_artifact();
+    let Some(asset) = release.assets.iter().find(|a| a.name == artifact_name).cloned() else {
+        println!();
+        ui::fail(&format!("Release {} exists but has no binary for this platform ({})", release.tag_name, artifact_name));
+        ui::skip("The release may still be building — try again in a few minutes");
+        return Ok(());
+    };
+
+    let info = UpdateInfo {
+        latest_version: release.tag_name,
+        asset,
+        release_notes: release.body,
     };
 
     ui::info_line("Latest version", &info.latest_version);

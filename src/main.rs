@@ -10,7 +10,7 @@ mod analytics;
 #[derive(Parser, Debug)]
 #[command(name = "vg")]
 #[command(author = "Volantic")]
-#[command(version = "3.8.1")]
+#[command(version = "3.8.2")]
 #[command(about = "Volantic Genesis — Fast, focused system CLI")]
 struct Cli {
     #[command(subcommand)]

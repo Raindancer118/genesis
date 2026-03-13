@@ -1,6 +1,6 @@
 [package]
 name = "volantic-genesis"
-version = "3.8.1"
+version = "3.8.2"
 edition = "2021"
 authors = ["Volantic Team"]
 description = "Volantic Genesis — Fast, focused system CLI"

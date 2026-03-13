@@ -386,6 +386,28 @@ fn validate_ext_part(ext: &str) -> bool {
     ext.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
 }
 
+pub(crate) fn is_glob_pattern(query: &str) -> bool {
+    query.contains('*') || query.contains('?')
+}
+
+/// Expand a user-typed glob into the right SQLite GLOB expression.
+/// Returns (column, pattern):
+///   "*.db"          → (name, "*.db")
+///   "src/*.rs"      → (path, "*/src/*.rs")
+///   "/etc/*.conf"   → (path, "/etc/*.conf")
+pub(crate) fn expand_glob(query: &str) -> (&'static str, String) {
+    if query.starts_with('/') {
+        // Absolute path glob — match directly
+        ("path", query.to_string())
+    } else if query.contains('/') {
+        // Relative path segment — anchor anywhere in the path
+        ("path", format!("*/{}", query))
+    } else {
+        // Bare filename glob (e.g. *.db, config*)
+        ("name", query.to_string())
+    }
+}
+
 pub(crate) fn sanitize_fts_query(query: &str) -> String {
     let trimmed = query.trim();
     // Phrase search: user wrapped in quotes
@@ -461,6 +483,134 @@ pub(crate) fn fmt_age(modified_unix: i64) -> String {
     }
 }
 
+fn run_glob_search(
+    pattern: &str,
+    limit: usize,
+    all_scopes: bool,
+    conn: &Connection,
+) -> Result<Vec<SearchResult>> {
+    let (col, glob_pat) = expand_glob(pattern);
+    let scope_filter = if all_scopes { "" } else { " AND m.scope = 'user'" };
+    let fetch_limit = (limit * 2) as i64;
+
+    let sql = format!(
+        "SELECT f.rowid, f.name, f.path, m.size, m.ext, m.modified_unix, m.scope
+         FROM files f
+         JOIN files_meta m ON f.rowid = m.rowid
+         WHERE f.{} GLOB ?1{}
+         ORDER BY f.name
+         LIMIT ?2",
+        col, scope_filter
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let results: Vec<SearchResult> = stmt
+        .query_map(params![glob_pat, fetch_limit], |row| Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, String>(6)?,
+        )))?
+        .filter_map(|r| r.ok())
+        .map(|(rowid, name, path, size, ext, modified_unix, scope)| SearchResult {
+            rowid,
+            name,
+            path,
+            size,
+            ext,
+            snippet: None,
+            match_type: "glob".to_string(),
+            is_fuzzy: false,
+            bm25: 0.0,
+            modified_unix,
+            final_score: modified_unix as f64, // sort by recency
+            scope,
+        })
+        .collect();
+
+    Ok(results)
+}
+
+fn print_results(
+    mut results: Vec<SearchResult>,
+    limit: usize,
+    elapsed_ms: f64,
+    verbose: bool,
+) {
+    if results.is_empty() {
+        ui::skip("No results found.");
+        return;
+    }
+
+    let has_more = results.len() > limit;
+    if has_more { results.truncate(limit); }
+
+    let total = results.len();
+    let top_count = total.min(3);
+
+    println!();
+    println!("  {} {}", "──".truecolor(37, 99, 235), "Top Results".truecolor(96, 165, 250).bold());
+    println!();
+
+    for (i, r) in results.iter().take(top_count).enumerate() {
+        let rank_str = format!("{}", i + 1).truecolor(96, 165, 250);
+        let star = "★".truecolor(250, 204, 21);
+        let path_colored = color_by_match_type(&r.path, &r.match_type);
+        let badge = format_badge(&r.match_type);
+        let age = fmt_age(r.modified_unix);
+        let size_str = fmt_bytes(r.size as u64);
+        let scope_badge = if r.scope == "system" { " [sys]".truecolor(148, 103, 189) } else { "".truecolor(0, 0, 0) };
+
+        println!("   {}  {}   {}   {}  {}  {}{}",
+            star, rank_str, path_colored, badge,
+            size_str.truecolor(100, 116, 139),
+            age.truecolor(100, 116, 139),
+            scope_badge,
+        );
+        if !r.is_fuzzy {
+            if let Some(ref snip) = r.snippet {
+                println!("        {}", snip.truecolor(71, 85, 105));
+            }
+        }
+        if verbose {
+            println!("        {} bm25={:.2}  score={:.1}", "score:".truecolor(71, 85, 105), r.bm25, r.final_score);
+        }
+        println!();
+    }
+
+    if total > 3 {
+        let section_title = format!("All Results · {:.1}ms", elapsed_ms);
+        let fill = 44usize.saturating_sub(section_title.chars().count());
+        let line = "─".repeat(fill);
+        println!("\n  {} {} {}", "──".truecolor(37, 99, 235), section_title.truecolor(96, 165, 250).bold(), line.truecolor(37, 99, 235));
+        println!();
+        for (i, r) in results.iter().enumerate().skip(3) {
+            let rank_str = format!("{:>3}", i + 1).truecolor(96, 165, 250);
+            let path_colored = color_by_match_type(&r.path, &r.match_type);
+            let badge = format_badge(&r.match_type);
+            let age = fmt_age(r.modified_unix);
+            let size_str = fmt_bytes(r.size as u64);
+            let scope_badge = if r.scope == "system" { " [sys]".truecolor(148, 103, 189) } else { "".truecolor(0, 0, 0) };
+            println!("      {}   {}   {}  {}  {}{}",
+                rank_str, path_colored, badge,
+                size_str.truecolor(100, 116, 139),
+                age.truecolor(100, 116, 139),
+                scope_badge,
+            );
+        }
+        println!();
+    } else {
+        println!("  {} {} · {:.1}ms", "──".truecolor(37, 99, 235), format!("{} found", total).truecolor(96, 165, 250), elapsed_ms);
+    }
+
+    if has_more {
+        ui::skip(&format!("More results available — use --limit {} to show more", limit * 2));
+    }
+}
+
 pub fn search(params: SearchParams, _config: &ConfigManager) -> Result<()> {
     ui::print_header("SEARCH");
 
@@ -474,8 +624,17 @@ pub fn search(params: SearchParams, _config: &ConfigManager) -> Result<()> {
     ui::section(&format!("Results for '{}'", params.query));
 
     let start = std::time::Instant::now();
-    let fts_query = sanitize_fts_query(&params.query);
     let limit = params.limit.unwrap_or(10);
+
+    // ── Glob shortcut: query contains * or ? ──────────────────────────────────
+    if is_glob_pattern(&params.query) {
+        let results = run_glob_search(&params.query, limit, params.all_scopes, &conn)?;
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        print_results(results, limit, elapsed_ms, params.verbose);
+        return Ok(());
+    }
+
+    let fts_query = sanitize_fts_query(&params.query);
     let fetch_limit = (limit * 2) as i64; // fetch 2× for reranking
 
     let ext_clause = if let Some(ref ext_str) = params.ext {
@@ -631,101 +790,6 @@ pub fn search(params: SearchParams, _config: &ConfigManager) -> Result<()> {
     let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
     let rank_elapsed = rank_start.elapsed();
 
-    if fts_results.is_empty() {
-        ui::skip("No results found.");
-        return Ok(());
-    }
-
-    let has_more = fts_results.len() > limit;
-    if has_more {
-        fts_results.truncate(limit);
-    }
-
-    let total = fts_results.len();
-    let top_count = total.min(3);
-
-    println!();
-    println!("  {} {}",
-        "──".truecolor(37, 99, 235),
-        "Top Results".truecolor(96, 165, 250).bold()
-    );
-    println!();
-
-    for (i, result) in fts_results.iter().take(top_count).enumerate() {
-        let rank_str = format!("{}", i + 1).truecolor(96, 165, 250);
-        let star = "★".truecolor(250, 204, 21);
-        let path_colored = color_by_match_type(&result.path, &result.match_type);
-        let badge = format_badge(&result.match_type);
-        let age = fmt_age(result.modified_unix);
-        let size_str = fmt_bytes(result.size as u64);
-
-        let scope_badge = if result.scope == "system" {
-            " [sys]".truecolor(148, 103, 189)
-        } else {
-            "".truecolor(0, 0, 0) // invisible
-        };
-        println!("   {}  {}   {}   {}  {}  {}{}",
-            star, rank_str, path_colored, badge,
-            size_str.truecolor(100, 116, 139),
-            age.truecolor(100, 116, 139),
-            scope_badge,
-        );
-
-        if !result.is_fuzzy {
-            if let Some(ref snip) = result.snippet {
-                println!("        {}", snip.truecolor(71, 85, 105));
-            }
-        }
-
-        if params.verbose {
-            println!("        {} bm25={:.2}  score={:.1}",
-                "score:".truecolor(71, 85, 105),
-                result.bm25,
-                result.final_score,
-            );
-        }
-
-        println!();
-    }
-
-    if total > 3 {
-        let section_title = format!("All Results · {:.1}ms", elapsed_ms);
-        let fill = 44usize.saturating_sub(section_title.chars().count());
-        let line = "─".repeat(fill);
-        println!("\n  {} {} {}",
-            "──".truecolor(37, 99, 235),
-            section_title.truecolor(96, 165, 250).bold(),
-            line.truecolor(37, 99, 235)
-        );
-        println!();
-
-        for (i, result) in fts_results.iter().enumerate().skip(3) {
-            let rank_str = format!("{:>3}", i + 1).truecolor(96, 165, 250);
-            let path_colored = color_by_match_type(&result.path, &result.match_type);
-            let badge = format_badge(&result.match_type);
-            let age = fmt_age(result.modified_unix);
-            let size_str = fmt_bytes(result.size as u64);
-            let scope_badge = if result.scope == "system" {
-                " [sys]".truecolor(148, 103, 189)
-            } else {
-                "".truecolor(0, 0, 0)
-            };
-            println!("      {}   {}   {}  {}  {}{}",
-                rank_str, path_colored, badge,
-                size_str.truecolor(100, 116, 139),
-                age.truecolor(100, 116, 139),
-                scope_badge,
-            );
-        }
-        println!();
-    } else {
-        println!("  {} {} · {:.1}ms",
-            "──".truecolor(37, 99, 235),
-            format!("{} found", total).truecolor(96, 165, 250),
-            elapsed_ms
-        );
-    }
-
     if params.verbose {
         println!();
         println!("  {} FTS: {:.1}ms  Fuzzy: {:.1}ms  Rank: {:.1}ms",
@@ -735,10 +799,7 @@ pub fn search(params: SearchParams, _config: &ConfigManager) -> Result<()> {
             rank_elapsed.as_secs_f64() * 1000.0,
         );
     }
-
-    if has_more {
-        ui::skip(&format!("More results available — use --limit {} to show more", limit * 2));
-    }
+    print_results(fts_results, limit, elapsed_ms, params.verbose);
 
     Ok(())
 }
@@ -748,6 +809,7 @@ fn color_by_match_type(path: &str, match_type: &str) -> colored::ColoredString {
         "name"  => path.green(),
         "fuzzy" => path.yellow(),
         "path"  => path.cyan(),
+        "glob"  => path.magenta(),
         _       => path.truecolor(224, 242, 254),
     }
 }
@@ -758,6 +820,7 @@ fn format_badge(match_type: &str) -> colored::ColoredString {
         "name"  => badge.green(),
         "fuzzy" => badge.yellow(),
         "path"  => badge.cyan(),
+        "glob"  => badge.magenta(),
         _       => badge.truecolor(71, 85, 105),
     }
 }

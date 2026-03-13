@@ -19,10 +19,11 @@ use std::io::{self, IsTerminal};
 use crate::config::ConfigManager;
 use super::search::{
     get_db_path, sanitize_fts_query, compute_score, determine_match_type, fmt_age, fmt_bytes,
+    is_glob_pattern, expand_glob,
 };
 
 const PREVIEW_MAX_BYTES: u64 = 2 * 1024 * 1024; // 2 MB
-const DEBOUNCE_MS: u64 = 150;
+const DEBOUNCE_MS: u64 = 500;
 
 #[derive(Debug, Clone)]
 struct TuiResult {
@@ -129,10 +130,40 @@ fn do_search(query: &str, all_scopes: bool, conn: &rusqlite::Connection) -> (Vec
         return (Vec::new(), 0.0);
     }
     let start = std::time::Instant::now();
-    let fts_query = sanitize_fts_query(query);
     let limit = 50i64;
     let scope_clause = if all_scopes { "" } else { " AND m.scope = 'user'" };
 
+    // ── Glob shortcut ─────────────────────────────────────────────────────────
+    if is_glob_pattern(query) {
+        let (col, glob_pat) = expand_glob(query);
+        let sql = format!(
+            "SELECT f.name, f.path, m.size, m.modified_unix, m.scope
+             FROM files f JOIN files_meta m ON f.rowid = m.rowid
+             WHERE f.{} GLOB ?1{}
+             ORDER BY f.name LIMIT ?2",
+            col, scope_clause
+        );
+        let mut results = Vec::new();
+        if let Ok(mut stmt) = conn.prepare(&sql) {
+            let rows: Vec<(String, String, i64, i64, String)> = stmt
+                .query_map(params![glob_pat, limit], |row| Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                )))
+                .map(|iter| iter.filter_map(|r| r.ok()).collect())
+                .unwrap_or_default();
+            for (name, path, size, modified_unix, scope) in rows {
+                results.push(TuiResult { name, path, size, match_type: "glob".to_string(), modified_unix, scope });
+            }
+        }
+        return (results, start.elapsed().as_secs_f64() * 1000.0);
+    }
+
+    // ── FTS5 ─────────────────────────────────────────────────────────────────
+    let fts_query = sanitize_fts_query(query);
     let sql = format!(
         "SELECT f.rowid, f.name, f.path, m.size, m.ext,
                 bm25(files, 10.0, 5.0, 1.0) as bm25_score,
@@ -253,6 +284,7 @@ fn render(f: &mut Frame, state: &TuiState) {
             "name"  => Color::Green,
             "fuzzy" => Color::Yellow,
             "path"  => Color::Cyan,
+            "glob"  => Color::Magenta,
             _       => Color::DarkGray,
         };
         let age = fmt_age(r.modified_unix);

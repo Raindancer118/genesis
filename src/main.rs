@@ -76,6 +76,13 @@ enum Commands {
     /// Update Volantic Genesis itself
     #[command(name = "self-update")]
     SelfUpdate,
+    /// Wait until a new release is available, then install it automatically
+    #[command(name = "expect-update")]
+    ExpectUpdate {
+        /// Polling interval in seconds (default: 60)
+        #[arg(short = 'i', long, default_value = "60")]
+        interval: u64,
+    },
     /// View or change settings
     Config {
         /// Action: list, get, set, edit
@@ -96,40 +103,6 @@ async fn main() -> Result<()> {
 
     // Fire analytics ping in background (non-blocking, daily max)
     analytics::maybe_ping(&config_manager);
-
-    // Background update check: silently poll GitHub (ETag-aware, once per interval).
-    // If a new version is found, cache it; show a banner on next invocation.
-    let is_self_update_cmd = matches!(&cli.command, Commands::SelfUpdate);
-    {
-        let uc = &config_manager.config.update_check;
-        let elapsed = config::ConfigManager::seconds_since_last_update_check();
-        if uc.enabled && !is_self_update_cmd && elapsed >= uc.interval_minutes * 60 {
-            config::ConfigManager::touch_update_check_stamp();
-            std::thread::spawn(|| {
-                let (cached_etag, _) = config::ConfigManager::read_update_state();
-                let (info, new_etag) = commands::self_update::check_with_etag(
-                    cached_etag.as_deref(),
-                );
-                let pending = info.as_ref().map(|i| i.latest_version.as_str());
-                config::ConfigManager::write_update_state(new_etag.as_deref(), pending);
-            });
-        }
-    }
-
-    // Show update banner if a newer version is cached (and this isn't `self-update`).
-    if !is_self_update_cmd {
-        let (_, cached_version) = config::ConfigManager::read_update_state();
-        if let Some(v) = cached_version {
-            use colored::Colorize;
-            eprintln!(
-                "\n  {} {} → {}  •  run {} to install\n",
-                "Update available:".yellow().bold(),
-                commands::self_update::CURRENT_VERSION.dimmed(),
-                v.green().bold(),
-                "vg self-update".cyan(),
-            );
-        }
-    }
 
     // Auto-index: spawn a background re-index if the interval has elapsed.
     // Skip if the current command IS already an index job (avoid recursion).
@@ -174,6 +147,7 @@ async fn main() -> Result<()> {
         Commands::Health => "health",
         Commands::Info => "info",
         Commands::SelfUpdate => "self-update",
+        Commands::ExpectUpdate { .. } => "expect-update",
         Commands::Config { .. } => "config",
         Commands::Manjaro => "manjaro",
     };
@@ -235,6 +209,9 @@ async fn main() -> Result<()> {
         }
         Commands::SelfUpdate => {
             commands::self_update::run()?;
+        }
+        Commands::ExpectUpdate { interval } => {
+            commands::self_update::expect_update(interval)?;
         }
         Commands::Config { action, key, value } => {
             commands::config_cmd::run(action, key, value, &mut config_manager)?;

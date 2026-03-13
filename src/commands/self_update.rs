@@ -1,5 +1,4 @@
 use crate::ui;
-use crate::config::ConfigManager;
 use anyhow::{Result, Context, anyhow};
 use serde::Deserialize;
 use std::env;
@@ -227,6 +226,47 @@ pub fn apply(info: &UpdateInfo) -> Result<()> {
     Ok(())
 }
 
+/// Entry point for `vg expect-update` — blocks until a newer release is available, then installs it.
+pub fn expect_update(interval_secs: u64) -> Result<()> {
+    use colored::Colorize;
+
+    ui::print_header("EXPECT UPDATE");
+    ui::info_line("Current version", &format!("v{}", CURRENT_VERSION));
+    println!();
+    println!("  Waiting for a new release… (polling every {}s, Ctrl+C to cancel)", interval_secs);
+    println!();
+
+    let mut etag: Option<String> = None;
+    let mut attempt: u32 = 0;
+
+    loop {
+        attempt += 1;
+        let (info, new_etag) = check_with_etag(etag.as_deref());
+        etag = new_etag;
+
+        if let Some(info) = info {
+            println!();
+            ui::success(&format!("New version found: {}", info.latest_version));
+            ui::section(&format!("Downloading {}", info.asset.name));
+            apply(&info)?;
+            println!();
+            ui::success(&format!("Updated to {} — restart vg to use the new version.", info.latest_version));
+            return Ok(());
+        }
+
+        print!(
+            "  {}  check #{} — up to date ({})",
+            chrono::Local::now().format("%H:%M:%S").to_string().dimmed(),
+            attempt,
+            format!("next in {}s", interval_secs).dimmed(),
+        );
+        // Overwrite the same line on next iteration
+        print!("\r");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        std::thread::sleep(std::time::Duration::from_secs(interval_secs));
+    }
+}
+
 /// Entry point for `vg self-update` — interactive, shows header + release notes.
 pub fn run() -> Result<()> {
     ui::print_header("SELF UPDATE");
@@ -254,10 +294,6 @@ pub fn run() -> Result<()> {
 
     ui::section(&format!("Downloading {}", info.asset.name));
     apply(&info)?;
-
-    // Clear the cached pending version so the update banner stops showing.
-    let (etag, _) = ConfigManager::read_update_state();
-    ConfigManager::write_update_state(etag.as_deref(), None);
 
     println!();
     ui::success(&format!("Updated to {} — restart vg to use the new version.", info.latest_version));

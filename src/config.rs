@@ -14,26 +14,6 @@ pub struct Config {
     pub analytics: AnalyticsConfig,
     #[serde(default)]
     pub auto_index: AutoIndexConfig,
-    #[serde(default)]
-    pub update_check: UpdateCheckConfig,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(default)]
-pub struct UpdateCheckConfig {
-    /// Silently check for updates in the background and show a banner if one is available
-    pub enabled: bool,
-    /// How often to check (minutes). Default: 1440 (24 h)
-    pub interval_minutes: u64,
-}
-
-impl Default for UpdateCheckConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            interval_minutes: 1440,
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -228,80 +208,6 @@ impl ConfigManager {
             .unwrap_or(0);
         now.saturating_sub(ts)
     }
-
-    // ── Update-check state ────────────────────────────────────────────────
-
-    /// Path to the file that stores `<etag>\n<version>` (both lines optional).
-    pub fn update_state_path() -> PathBuf {
-        let base = if let Some(proj) = ProjectDirs::from("", "volantic", "genesis") {
-            proj.data_local_dir().to_path_buf()
-        } else {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".local").join("share").join("volantic-genesis")
-        };
-        base.join("update_state")
-    }
-
-    /// Path to the timestamp file for rate-limiting update checks.
-    pub fn update_check_stamp_path() -> PathBuf {
-        let base = if let Some(proj) = ProjectDirs::from("", "volantic", "genesis") {
-            proj.data_local_dir().to_path_buf()
-        } else {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".local").join("share").join("volantic-genesis")
-        };
-        base.join("last_update_check")
-    }
-
-    /// Seconds since the last background update check. Returns `u64::MAX` if never run.
-    pub fn seconds_since_last_update_check() -> u64 {
-        let stamp = Self::update_check_stamp_path();
-        let Ok(content) = fs::read_to_string(&stamp) else { return u64::MAX };
-        let Ok(ts) = content.trim().parse::<u64>() else { return u64::MAX };
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        now.saturating_sub(ts)
-    }
-
-    pub fn touch_update_check_stamp() {
-        let stamp = Self::update_check_stamp_path();
-        if let Some(parent) = stamp.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let _ = fs::write(&stamp, now.to_string());
-    }
-
-    /// Read cached `(etag, pending_version)` from the state file.
-    pub fn read_update_state() -> (Option<String>, Option<String>) {
-        let path = Self::update_state_path();
-        let Ok(content) = fs::read_to_string(&path) else { return (None, None) };
-        let mut lines = content.lines();
-        let etag    = lines.next().filter(|s| !s.is_empty()).map(str::to_string);
-        let version = lines.next().filter(|s| !s.is_empty()).map(str::to_string);
-        (etag, version)
-    }
-
-    /// Persist `etag` and optional `pending_version` to the state file.
-    pub fn write_update_state(etag: Option<&str>, version: Option<&str>) {
-        let path = Self::update_state_path();
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let content = format!("{}\n{}\n",
-            etag.unwrap_or(""),
-            version.unwrap_or(""));
-        let _ = fs::write(&path, content);
-    }
-
-    // ── Auto-index stamp ──────────────────────────────────────────────────
 
     /// Write the current time as the last auto-index stamp.
     pub fn touch_auto_index_stamp() {

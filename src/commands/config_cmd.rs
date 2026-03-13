@@ -7,7 +7,9 @@ use colored::Colorize;
 
 pub fn run(action: Option<String>, key: Option<String>, value: Option<String>, config: &mut ConfigManager) -> Result<()> {
     match action.as_deref() {
-        Some("list") | None => list(config),
+        // No action or "edit" → launch TUI; "list" → plain text output for scripting
+        None | Some("edit") => super::config_tui::run(config)?,
+        Some("list") => list(config),
         Some("get") => {
             if let Some(k) = key {
                 get_key(&k, config);

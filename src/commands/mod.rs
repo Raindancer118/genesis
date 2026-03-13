@@ -7,4 +7,5 @@ pub mod health;
 pub mod info;
 pub mod self_update;
 pub mod config_cmd;
+pub mod config_tui;
 pub mod manjaro;

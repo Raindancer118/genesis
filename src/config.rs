@@ -135,10 +135,12 @@ impl ConfigManager {
         // Auto-generate client_id if missing
         if config.analytics.client_id.is_empty() {
             config.analytics.client_id = Self::generate_client_id();
-            // Save immediately so it persists
-            let mgr = ConfigManager { config_path: config_path.clone(), config: config.clone() };
-            let _ = mgr.save();
         }
+        // Always save after loading: existing values are preserved by serde,
+        // and any new fields added in a version upgrade get written with their
+        // defaults — so the on-disk config stays complete after every update.
+        let mgr = ConfigManager { config_path: config_path.clone(), config: config.clone() };
+        let _ = mgr.save();
         Self { config_path, config }
     }
 

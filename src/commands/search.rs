@@ -5,11 +5,12 @@ use anyhow::{Result, Context};
 use colored::Colorize;
 use rusqlite::{Connection, params};
 use std::path::PathBuf;
-use walkdir::WalkDir;
+use ignore::WalkBuilder;
 use directories::ProjectDirs;
 use chrono::Utc;
-use fuzzy_matcher::FuzzyMatcher;
-use fuzzy_matcher::skim::SkimMatcherV2;
+use nucleo_matcher::{Matcher, Config as NucleoConfig};
+use nucleo_matcher::pattern::{Pattern, CaseMatching, Normalization};
+use rayon::prelude::*;
 
 // Text extensions whose content will be indexed
 const TEXT_EXTENSIONS: &[&str] = &[
@@ -21,11 +22,13 @@ const TEXT_EXTENSIONS: &[&str] = &[
 
 const MAX_CONTENT_BYTES: usize = 256 * 1024; // 256 KB
 const FUZZY_SCAN_LIMIT: i64 = 50_000;
-const FUZZY_SCORE_THRESHOLD: i64 = 30;
+const FUZZY_SCORE_THRESHOLD: u32 = 150;
+const FUZZY_MAX_RESULTS: usize = 5;
 const FUZZY_FALLBACK_THRESHOLD: usize = 5;
 const PROGRESS_INTERVAL: u64 = 10_000;
+const INDEX_BATCH_SIZE: usize = 500;
 
-fn get_db_path() -> PathBuf {
+pub(crate) fn get_db_path() -> PathBuf {
     if let Some(proj_dirs) = ProjectDirs::from("", "volantic", "genesis") {
         proj_dirs.data_dir().join("search.db")
     } else {
@@ -41,14 +44,13 @@ fn open_db() -> Result<Connection> {
         std::fs::create_dir_all(parent).context("Failed to create data directory")?;
     }
     let conn = Connection::open(&db_path).context("Failed to open SQLite database")?;
-    // Enable WAL mode for better performance
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
     migrate_schema(&conn)?;
     Ok(conn)
 }
 
 fn migrate_schema(conn: &Connection) -> Result<()> {
-    // Check if the files FTS table has the content column
+    // Check for 'content' column in FTS table
     let content_col_count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('files') WHERE name='content'",
         [],
@@ -56,12 +58,25 @@ fn migrate_schema(conn: &Connection) -> Result<()> {
     ).unwrap_or(0);
 
     if content_col_count == 0 {
-        // Drop old tables and recreate with new schema
         conn.execute_batch("
             DROP TABLE IF EXISTS files;
             DROP TABLE IF EXISTS files_meta;
         ")?;
         ui::skip("Index schema updated — please run 'vg index' to rebuild.");
+        return Ok(());
+    }
+
+    // Add modified_unix column if missing (non-destructive)
+    let modified_unix_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('files_meta') WHERE name='modified_unix'",
+        [],
+        |r| r.get(0),
+    ).unwrap_or(0);
+
+    if modified_unix_count == 0 {
+        conn.execute_batch(
+            "ALTER TABLE files_meta ADD COLUMN modified_unix INTEGER NOT NULL DEFAULT 0;"
+        )?;
     }
 
     Ok(())
@@ -83,7 +98,8 @@ fn init_db(conn: &Connection) -> Result<()> {
             rowid INTEGER PRIMARY KEY,
             size INTEGER NOT NULL,
             modified TEXT NOT NULL,
-            ext TEXT NOT NULL DEFAULT ''
+            ext TEXT NOT NULL DEFAULT '',
+            modified_unix INTEGER NOT NULL DEFAULT 0
         );
     ")?;
     Ok(())
@@ -105,12 +121,21 @@ fn read_file_content(path: &str, ext: &str) -> String {
             } else {
                 &bytes
             };
-            // Strip null bytes and convert
             let s = String::from_utf8_lossy(truncated);
             s.chars().filter(|&c| c != '\0').collect()
         }
         Err(_) => String::new(),
     }
+}
+
+struct FileEntry {
+    name: String,
+    path: String,
+    size: i64,
+    modified: String,
+    modified_unix: i64,
+    ext: String,
+    content: String,
 }
 
 pub fn build_index(paths: Vec<PathBuf>, config: &ConfigManager) -> Result<()> {
@@ -119,14 +144,14 @@ pub fn build_index(paths: Vec<PathBuf>, config: &ConfigManager) -> Result<()> {
     let conn = open_db()?;
     init_db(&conn)?;
 
-    // Clear existing index
     conn.execute_batch("DELETE FROM files; DELETE FROM files_meta;")?;
 
-    let ignore_patterns = &config.config.search.ignore_patterns;
+    let ignore_patterns = config.config.search.ignore_patterns.clone();
     let max_depth = config.config.search.max_depth;
     let exclude_hidden = config.config.search.exclude_hidden;
 
     let mut count: u64 = 0;
+    let index_start = std::time::Instant::now();
 
     for base_path in &paths {
         if !base_path.exists() {
@@ -135,54 +160,88 @@ pub fn build_index(paths: Vec<PathBuf>, config: &ConfigManager) -> Result<()> {
         }
         ui::info_line("Indexing", &base_path.display().to_string());
 
-        let walker = WalkDir::new(base_path)
-            .max_depth(max_depth)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| should_include(e, ignore_patterns, exclude_hidden));
+        // Collect all file entries using ignore-aware walker
+        let mut pending: Vec<(String, String, i64, String, i64, String)> = Vec::new();
+
+        let walker = WalkBuilder::new(base_path)
+            .max_depth(Some(max_depth))
+            .hidden(exclude_hidden)
+            .git_ignore(true)
+            .git_global(true)
+            .ignore(true)
+            .build();
 
         for entry in walker {
-            match entry {
-                Ok(e) if e.file_type().is_file() => {
-                    if let Ok(meta) = e.metadata() {
-                        let name = e.file_name().to_string_lossy().to_string();
-                        let path = e.path().to_string_lossy().to_string();
-                        let size = meta.len() as i64;
-                        let modified = meta.modified()
-                            .map(|t| chrono::DateTime::<Utc>::from(t).to_rfc3339())
-                            .unwrap_or_default();
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                continue;
+            }
+            let path_str = entry.path().to_string_lossy().to_string();
+            // Post-filter: user ignore_patterns (substring match, backward compatible)
+            if ignore_patterns.iter().any(|p| path_str.contains(p.as_str())) {
+                continue;
+            }
+            if let Ok(meta) = entry.metadata() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let size = meta.len() as i64;
+                let modified_unix = meta.modified()
+                    .map(|t| t.duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0))
+                    .unwrap_or(0);
+                let modified = meta.modified()
+                    .map(|t| chrono::DateTime::<Utc>::from(t).to_rfc3339())
+                    .unwrap_or_default();
+                let ext = entry.path()
+                    .extension()
+                    .map(|s| s.to_string_lossy().to_lowercase().to_string())
+                    .unwrap_or_default();
+                pending.push((name, path_str, size, modified, modified_unix, ext));
+            }
+        }
 
-                        // Get extension
-                        let ext = e.path()
-                            .extension()
-                            .map(|s| s.to_string_lossy().to_lowercase())
-                            .unwrap_or_default();
-
-                        // Read content for text files
-                        let content = read_file_content(&path, &ext);
-
-                        conn.execute(
-                            "INSERT INTO files(name, path, content) VALUES (?1, ?2, ?3)",
-                            params![name, path, content],
-                        )?;
-                        let rowid = conn.last_insert_rowid();
-                        conn.execute(
-                            "INSERT INTO files_meta(rowid, size, modified, ext) VALUES (?1, ?2, ?3, ?4)",
-                            params![rowid, size, modified, ext],
-                        )?;
-                        count += 1;
-
-                        if count % PROGRESS_INTERVAL == 0 {
-                            ui::info_line("Progress", &format!("{} files...", format_number(count)));
-                        }
+        // Process in batches: rayon parallel content reads, serial SQLite insert
+        for chunk in pending.chunks(INDEX_BATCH_SIZE) {
+            let entries: Vec<FileEntry> = chunk
+                .par_iter()
+                .map(|(name, path, size, modified, modified_unix, ext)| {
+                    let content = read_file_content(path, ext);
+                    FileEntry {
+                        name: name.clone(),
+                        path: path.clone(),
+                        size: *size,
+                        modified: modified.clone(),
+                        modified_unix: *modified_unix,
+                        ext: ext.clone(),
+                        content,
                     }
+                })
+                .collect();
+
+            for fe in entries {
+                conn.execute(
+                    "INSERT INTO files(name, path, content) VALUES (?1, ?2, ?3)",
+                    params![fe.name, fe.path, fe.content],
+                )?;
+                let rowid = conn.last_insert_rowid();
+                conn.execute(
+                    "INSERT INTO files_meta(rowid, size, modified, ext, modified_unix) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![rowid, fe.size, fe.modified, fe.ext, fe.modified_unix],
+                )?;
+                count += 1;
+
+                if count % PROGRESS_INTERVAL == 0 {
+                    let elapsed = index_start.elapsed().as_secs_f64();
+                    let rate = if elapsed > 0.0 { count as f64 / elapsed } else { 0.0 };
+                    ui::info_line("Progress", &format!("{} files ({:.0}/s)...", format_number(count), rate));
                 }
-                _ => {}
             }
         }
     }
 
-    // Update metadata
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "INSERT OR REPLACE INTO index_meta(key, value) VALUES ('last_updated', ?1)",
@@ -203,27 +262,10 @@ pub fn build_index(paths: Vec<PathBuf>, config: &ConfigManager) -> Result<()> {
         ui::skip("Update your paths:  vg config edit");
         ui::skip("Or specify directly: vg index --paths /home/you");
     } else {
-        ui::success(&format!("Indexed {} files into SQLite FTS5", count));
+        ui::success(&format!("Indexed {} files into SQLite FTS5", format_number(count)));
         ui::info_line("Database", &get_db_path().display().to_string());
     }
     Ok(())
-}
-
-fn should_include(entry: &walkdir::DirEntry, ignore_patterns: &[String], exclude_hidden: bool) -> bool {
-    let path = entry.path();
-    let path_str = path.to_string_lossy();
-    if exclude_hidden {
-        if let Some(name) = path.file_name() {
-            let name_str = name.to_string_lossy();
-            if name_str.starts_with('.') && name_str != "." && name_str != ".." {
-                return false;
-            }
-        }
-    }
-    for pattern in ignore_patterns {
-        if path_str.contains(pattern.as_str()) { return false; }
-    }
-    true
 }
 
 pub struct SearchParams {
@@ -231,26 +273,105 @@ pub struct SearchParams {
     pub ext: Option<String>,
     pub path_filter: Option<String>,
     pub limit: Option<usize>,
+    pub verbose: bool,
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 struct SearchResult {
     rowid: i64,
     name: String,
     path: String,
     size: i64,
+    #[allow(dead_code)]
     ext: String,
     snippet: Option<String>,
     match_type: String,
     is_fuzzy: bool,
+    bm25: f64,
+    modified_unix: i64,
+    final_score: f64,
 }
 
 fn validate_ext_part(ext: &str) -> bool {
     ext.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-')
 }
 
-pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
+pub(crate) fn sanitize_fts_query(query: &str) -> String {
+    let trimmed = query.trim();
+    // Phrase search: user wrapped in quotes
+    if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() > 2 {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        let inner_escaped = inner.replace('"', "");
+        return format!("\"{}\"", inner_escaped);
+    }
+    let clean: String = query.chars()
+        .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '.' || *c == '_' || *c == '-')
+        .collect();
+    if clean.trim().is_empty() {
+        return query.to_string();
+    }
+    // Multi-word: each token gets prefix search; FTS5 AND is implicit
+    clean.split_whitespace()
+        .map(|token| format!("{}*", token))
+        .collect::<Vec<_>>()
+        .join(" AND ")
+}
+
+pub(crate) fn compute_score(bm25: f64, name: &str, path: &str, query: &str, modified_unix: i64) -> f64 {
+    let base = -bm25; // FTS5 BM25 is negative; negate so higher = better
+    let query_lower = query.to_lowercase();
+    let name_lower = name.to_lowercase();
+    let path_lower = path.to_lowercase();
+    let multiplier = if name_lower == query_lower { 5.0 }
+        else if name_lower.starts_with(&query_lower) { 3.0 }
+        else if name_lower.contains(&query_lower) { 2.0 }
+        else if path_lower.contains(&query_lower) { 1.5 }
+        else { 1.0 };
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let age_days = if modified_unix > 0 { (now_unix - modified_unix).max(0) / 86400 } else { 9999 };
+    let recency = if age_days < 7 { 200.0 }
+        else if age_days < 30 { 100.0 }
+        else if age_days < 90 { 30.0 }
+        else { 0.0 };
+    base * multiplier + recency
+}
+
+pub(crate) fn determine_match_type(query: &str, name: &str, path: &str, is_fuzzy: bool) -> String {
+    if is_fuzzy {
+        return "fuzzy".to_string();
+    }
+    let q = query.to_lowercase();
+    let n = name.to_lowercase();
+    let p = path.to_lowercase();
+    if n.contains(&q) { "name".to_string() }
+    else if p.contains(&q) { "path".to_string() }
+    else { "content".to_string() }
+}
+
+pub(crate) fn fmt_age(modified_unix: i64) -> String {
+    if modified_unix == 0 { return "—".to_string(); }
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let diff = (now_unix - modified_unix).max(0);
+    if diff < 3600 {
+        format!("{}m ago", diff / 60)
+    } else if diff < 86400 {
+        format!("{}h ago", diff / 3600)
+    } else if diff < 86400 * 30 {
+        format!("{}d ago", diff / 86400)
+    } else if diff < 86400 * 365 {
+        format!("{}mo ago", diff / (86400 * 30))
+    } else {
+        format!("{}y ago", diff / (86400 * 365))
+    }
+}
+
+pub fn search(params: SearchParams, _config: &ConfigManager) -> Result<()> {
     ui::print_header("SEARCH");
 
     let db_path = get_db_path();
@@ -260,18 +381,13 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
     }
 
     let conn = open_db()?;
-
     ui::section(&format!("Results for '{}'", params.query));
 
     let start = std::time::Instant::now();
-
     let fts_query = sanitize_fts_query(&params.query);
-    // Default: show 10; user can override with --limit
     let limit = params.limit.unwrap_or(10);
-    // Fetch more than needed so we know if there are additional results
-    let fetch_limit = limit + 1;
+    let fetch_limit = (limit * 2) as i64; // fetch 2× for reranking
 
-    // Build ext filter clause
     let ext_clause = if let Some(ref ext_str) = params.ext {
         let parts: Vec<&str> = ext_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
         let valid_parts: Vec<&str> = parts.into_iter().filter(|s| validate_ext_part(s)).collect();
@@ -285,10 +401,8 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
         None
     };
 
-    // Build path filter
     let path_pattern = params.path_filter.as_ref().map(|p| format!("{}%", p));
 
-    // Build the full SQL query
     let sql = {
         let mut conditions = vec!["files MATCH ?1".to_string()];
         if let Some(ref ec) = ext_clause {
@@ -299,7 +413,9 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
         }
         format!(
             "SELECT f.rowid, f.name, f.path, m.size, m.ext,
-                    snippet(files, 2, '[', ']', '...', 20) as snip
+                    snippet(files, 2, '[', ']', '...', 20) as snip,
+                    bm25(files, 10.0, 5.0, 1.0) as bm25_score,
+                    m.modified_unix
              FROM files f
              JOIN files_meta m ON f.rowid = m.rowid
              WHERE {}
@@ -309,108 +425,130 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
         )
     };
 
+    let fts_start = std::time::Instant::now();
+
     let mut fts_results: Vec<SearchResult> = {
         let mut stmt = conn.prepare(&sql)?;
-        let fetch_limit_i64 = fetch_limit as i64;
 
-        if path_pattern.is_some() {
+        type Row = (i64, String, String, i64, String, String, f64, i64);
+        let rows: Vec<Row> = if path_pattern.is_some() {
             stmt.query_map(
-                params![fts_query, fetch_limit_i64, path_pattern.as_deref()],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, String>(5)?,
-                    ))
-                },
-            )?.filter_map(|r| r.ok()).map(|(rowid, name, path, size, ext, snip)| {
-                let match_type = determine_match_type(&params.query, &name, &path, false);
-                let snippet = if snip.contains('[') { Some(snip) } else { None };
-                SearchResult { rowid, name, path, size, ext, snippet, match_type, is_fuzzy: false }
-            }).collect()
+                params![fts_query, fetch_limit, path_pattern.as_deref()],
+                |row| Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, f64>(6)?,
+                    row.get::<_, i64>(7)?,
+                )),
+            )?.filter_map(|r| r.ok()).collect()
         } else {
             stmt.query_map(
-                params![fts_query, fetch_limit_i64],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, String>(5)?,
-                    ))
-                },
-            )?.filter_map(|r| r.ok()).map(|(rowid, name, path, size, ext, snip)| {
-                let match_type = determine_match_type(&params.query, &name, &path, false);
-                let snippet = if snip.contains('[') { Some(snip) } else { None };
-                SearchResult { rowid, name, path, size, ext, snippet, match_type, is_fuzzy: false }
-            }).collect()
-        }
+                params![fts_query, fetch_limit],
+                |row| Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, f64>(6)?,
+                    row.get::<_, i64>(7)?,
+                )),
+            )?.filter_map(|r| r.ok()).collect()
+        };
+
+        rows.into_iter().map(|(rowid, name, path, size, ext, snip, bm25, modified_unix)| {
+            let match_type = determine_match_type(&params.query, &name, &path, false);
+            let snippet = if snip.contains('[') { Some(snip) } else { None };
+            let final_score = compute_score(bm25, &name, &path, &params.query, modified_unix);
+            SearchResult { rowid, name, path, size, ext, snippet, match_type, is_fuzzy: false, bm25, modified_unix, final_score }
+        }).collect()
     };
+
+    let fts_elapsed = fts_start.elapsed();
+
+    // Sort by final_score descending
+    fts_results.sort_by(|a, b| b.final_score.partial_cmp(&a.final_score).unwrap_or(std::cmp::Ordering::Equal));
+
+    let fuzzy_start = std::time::Instant::now();
 
     // Fuzzy fallback if not enough FTS results
     if fts_results.len() < FUZZY_FALLBACK_THRESHOLD {
         let existing_rowids: std::collections::HashSet<i64> = fts_results.iter().map(|r| r.rowid).collect();
 
         let mut scan_stmt = conn.prepare(
-            "SELECT f.rowid, f.name, f.path, m.size, m.ext
+            "SELECT f.rowid, f.name, f.path, m.size, m.ext, m.modified_unix
              FROM files f
              JOIN files_meta m ON f.rowid = m.rowid
              LIMIT ?1"
         )?;
 
-        let fuzzy_candidates: Vec<(i64, String, String, i64, String)> = scan_stmt
-            .query_map(params![FUZZY_SCAN_LIMIT], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, String>(4)?,
-                ))
-            })?
+        let fuzzy_candidates: Vec<(i64, String, String, i64, String, i64)> = scan_stmt
+            .query_map(params![FUZZY_SCAN_LIMIT], |row| Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+            )))?
             .filter_map(|r| r.ok())
             .collect();
 
-        let matcher = SkimMatcherV2::default();
-        let query_lower = params.query.to_lowercase();
+        let mut matcher = Matcher::new(NucleoConfig::DEFAULT.match_paths());
+        let pattern = Pattern::parse(&params.query, CaseMatching::Smart, Normalization::Smart);
 
-        for (rowid, name, path, size, ext) in fuzzy_candidates {
-            if existing_rowids.contains(&rowid) {
-                continue;
-            }
-            let score_name = matcher.fuzzy_match(&name.to_lowercase(), &query_lower).unwrap_or(0);
-            let score_path = matcher.fuzzy_match(&path.to_lowercase(), &query_lower).unwrap_or(0);
-            let score = score_name.max(score_path);
-            if score > FUZZY_SCORE_THRESHOLD {
-                let match_type = determine_match_type(&params.query, &name, &path, true);
-                fts_results.push(SearchResult {
-                    rowid,
-                    name,
-                    path,
-                    size,
-                    ext,
-                    snippet: None,
-                    match_type,
-                    is_fuzzy: true,
-                });
-            }
+        let mut fuzzy_scored: Vec<(u32, i64, String, String, i64, String, i64)> = fuzzy_candidates
+            .into_iter()
+            .filter(|(rowid, _, _, _, _, _)| !existing_rowids.contains(rowid))
+            .filter_map(|(rowid, name, path, size, ext, modified_unix)| {
+                let haystack = nucleo_matcher::Utf32String::from(name.as_str());
+                let score = pattern.score(haystack.slice(..), &mut matcher)?;
+                if score >= FUZZY_SCORE_THRESHOLD {
+                    Some((score, rowid, name, path, size, ext, modified_unix))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        fuzzy_scored.sort_by(|a, b| b.0.cmp(&a.0));
+        fuzzy_scored.truncate(FUZZY_MAX_RESULTS);
+
+        for (_, rowid, name, path, size, ext, modified_unix) in fuzzy_scored {
+            let match_type = determine_match_type(&params.query, &name, &path, true);
+            fts_results.push(SearchResult {
+                rowid,
+                name,
+                path,
+                size,
+                ext,
+                snippet: None,
+                match_type,
+                is_fuzzy: true,
+                bm25: 0.0,
+                modified_unix,
+                final_score: 0.0,
+            });
         }
     }
 
+    let fuzzy_elapsed = fuzzy_start.elapsed();
+
+    let rank_start = std::time::Instant::now();
     let elapsed = start.elapsed();
     let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
+    let rank_elapsed = rank_start.elapsed();
 
     if fts_results.is_empty() {
         ui::skip("No results found.");
         return Ok(());
     }
 
-    // has_more: we fetched limit+1 results; if we got exactly that, there are more
     let has_more = fts_results.len() > limit;
     if has_more {
         fts_results.truncate(limit);
@@ -419,7 +557,6 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
     let total = fts_results.len();
     let top_count = total.min(3);
 
-    // ── Top Results ───────────────────────────────────
     println!();
     println!("  {} {}",
         "──".truecolor(37, 99, 235),
@@ -430,20 +567,34 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
     for (i, result) in fts_results.iter().take(top_count).enumerate() {
         let rank_str = format!("{}", i + 1).truecolor(96, 165, 250);
         let star = "★".truecolor(250, 204, 21);
-        let path_str = result.path.truecolor(224, 242, 254);
-        let badge = format!("{:<8}", result.match_type).truecolor(71, 85, 105);
+        let path_colored = color_by_match_type(&result.path, &result.match_type);
+        let badge = format_badge(&result.match_type);
+        let age = fmt_age(result.modified_unix);
+        let size_str = fmt_bytes(result.size as u64);
 
-        println!("   {}  {}   {}   {}", star, rank_str, path_str, badge);
+        println!("   {}  {}   {}   {}  {}  {}",
+            star, rank_str, path_colored, badge,
+            size_str.truecolor(100, 116, 139),
+            age.truecolor(100, 116, 139),
+        );
 
-        if result.match_type == "content" {
+        if !result.is_fuzzy {
             if let Some(ref snip) = result.snippet {
                 println!("        {}", snip.truecolor(71, 85, 105));
             }
         }
+
+        if params.verbose {
+            println!("        {} bm25={:.2}  score={:.1}",
+                "score:".truecolor(71, 85, 105),
+                result.bm25,
+                result.final_score,
+            );
+        }
+
         println!();
     }
 
-    // ── All Results ───────────────────────────────────
     if total > 3 {
         let section_title = format!("All Results · {:.1}ms", elapsed_ms);
         let fill = 44usize.saturating_sub(section_title.chars().count());
@@ -457,9 +608,15 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
 
         for (i, result) in fts_results.iter().enumerate().skip(3) {
             let rank_str = format!("{:>3}", i + 1).truecolor(96, 165, 250);
-            let path_str = result.path.truecolor(224, 242, 254);
-            let badge = format!("{:<8}", result.match_type).truecolor(71, 85, 105);
-            println!("      {}   {}   {}", rank_str, path_str, badge);
+            let path_colored = color_by_match_type(&result.path, &result.match_type);
+            let badge = format_badge(&result.match_type);
+            let age = fmt_age(result.modified_unix);
+            let size_str = fmt_bytes(result.size as u64);
+            println!("      {}   {}   {}  {}  {}",
+                rank_str, path_colored, badge,
+                size_str.truecolor(100, 116, 139),
+                age.truecolor(100, 116, 139),
+            );
         }
         println!();
     } else {
@@ -470,6 +627,16 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
         );
     }
 
+    if params.verbose {
+        println!();
+        println!("  {} FTS: {:.1}ms  Fuzzy: {:.1}ms  Rank: {:.1}ms",
+            "timing:".truecolor(71, 85, 105),
+            fts_elapsed.as_secs_f64() * 1000.0,
+            fuzzy_elapsed.as_secs_f64() * 1000.0,
+            rank_elapsed.as_secs_f64() * 1000.0,
+        );
+    }
+
     if has_more {
         ui::skip(&format!("More results available — use --limit {} to show more", limit * 2));
     }
@@ -477,35 +644,26 @@ pub fn search(params: SearchParams, config: &ConfigManager) -> Result<()> {
     Ok(())
 }
 
-fn determine_match_type(query: &str, name: &str, path: &str, is_fuzzy: bool) -> String {
-    if is_fuzzy {
-        return "fuzzy".to_string();
-    }
-    let q = query.to_lowercase();
-    let n = name.to_lowercase();
-    let p = path.to_lowercase();
-    if n.contains(&q) {
-        "name".to_string()
-    } else if p.contains(&q) {
-        "path".to_string()
-    } else {
-        "content".to_string()
+fn color_by_match_type(path: &str, match_type: &str) -> colored::ColoredString {
+    match match_type {
+        "name"  => path.green(),
+        "fuzzy" => path.yellow(),
+        "path"  => path.cyan(),
+        _       => path.truecolor(224, 242, 254),
     }
 }
 
-fn sanitize_fts_query(query: &str) -> String {
-    // Wrap in quotes for phrase search, or use prefix search
-    // FTS5 special chars: " * ^ ( )
-    let clean: String = query.chars().filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '.' || *c == '_' || *c == '-').collect();
-    if clean.trim().is_empty() { return query.to_string(); }
-    // Add * for prefix matching on each token
-    clean.split_whitespace()
-        .map(|token| format!("{}*", token))
-        .collect::<Vec<_>>()
-        .join(" ")
+fn format_badge(match_type: &str) -> colored::ColoredString {
+    let badge = format!("{:<8}", match_type);
+    match match_type {
+        "name"  => badge.green(),
+        "fuzzy" => badge.yellow(),
+        "path"  => badge.cyan(),
+        _       => badge.truecolor(71, 85, 105),
+    }
 }
 
-fn fmt_bytes(bytes: u64) -> String {
+pub(crate) fn fmt_bytes(bytes: u64) -> String {
     const UNIT: u64 = 1024;
     if bytes < UNIT { return format!("{} B", bytes); }
     let div = UNIT as f64;
@@ -518,9 +676,7 @@ fn format_number(n: u64) -> String {
     let s = n.to_string();
     let mut result = String::new();
     for (i, c) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            result.push(',');
-        }
+        if i > 0 && i % 3 == 0 { result.push(','); }
         result.push(c);
     }
     result.chars().rev().collect()
@@ -559,7 +715,6 @@ pub fn info() -> Result<()> {
         }
     }
 
-    // DB file size
     if let Ok(meta) = std::fs::metadata(&db_path) {
         ui::info_line("DB size", &fmt_bytes(meta.len()));
     }

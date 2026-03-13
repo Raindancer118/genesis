@@ -10,7 +10,7 @@ mod analytics;
 #[derive(Parser, Debug)]
 #[command(name = "vg")]
 #[command(author = "Volantic")]
-#[command(version = "3.0.0")]
+#[command(version = "3.4.0")]
 #[command(about = "Volantic Genesis — Fast, focused system CLI")]
 struct Cli {
     #[command(subcommand)]
@@ -34,9 +34,10 @@ enum Commands {
     Uninstall {
         pkg: String,
     },
-    /// Lightning-fast file search (SQLite FTS5)
+    /// Lightning-fast file search (SQLite FTS5 + interactive TUI)
     Search {
-        query: String,
+        /// Search query (omit to launch interactive TUI)
+        query: Option<String>,
         /// Filter by extension(s), comma-separated (e.g. rs,md,toml)
         #[arg(short = 'e', long)]
         ext: Option<String>,
@@ -46,6 +47,12 @@ enum Commands {
         /// Maximum number of results
         #[arg(short = 'l', long)]
         limit: Option<usize>,
+        /// Launch interactive TUI (default when no query given)
+        #[arg(short = 'i', long)]
+        interactive: bool,
+        /// Show match scores and timing breakdown
+        #[arg(short = 'v', long)]
+        verbose: bool,
     },
     /// Build or show file search index
     Index {
@@ -145,13 +152,20 @@ async fn main() -> Result<()> {
         Commands::Uninstall { pkg } => {
             commands::package::uninstall(&pkg)?;
         }
-        Commands::Search { query, ext, path, limit } => {
-            commands::search::search(commands::search::SearchParams {
-                query,
-                ext,
-                path_filter: path,
-                limit,
-            }, &config_manager)?;
+        Commands::Search { query, ext, path, limit, interactive, verbose } => {
+            let use_tui = interactive || query.is_none();
+            if use_tui {
+                let initial = query.as_deref().unwrap_or("");
+                commands::search_tui::run_interactive_with_query(&config_manager, initial)?;
+            } else {
+                commands::search::search(commands::search::SearchParams {
+                    query: query.unwrap(),
+                    ext,
+                    path_filter: path,
+                    limit,
+                    verbose,
+                }, &config_manager)?;
+            }
         }
         Commands::Index { info, paths, background } => {
             if info {

@@ -1,6 +1,7 @@
 pub mod update;
 pub mod package;
 pub mod search;
+pub mod search_tui;
 pub mod greet;
 pub mod health;
 pub mod info;

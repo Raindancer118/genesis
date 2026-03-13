@@ -1,4 +1,5 @@
 use crate::ui;
+use crate::config::ConfigManager;
 use anyhow::{Result, Context, anyhow};
 use serde::Deserialize;
 use std::env;
@@ -106,6 +107,62 @@ pub fn check() -> Option<UpdateInfo> {
     })
 }
 
+/// ETag-aware poll: sends `If-None-Match` so GitHub returns 304 (free, no rate-limit cost)
+/// when nothing changed. Returns `(Option<UpdateInfo>, new_etag)`.
+pub fn check_with_etag(etag: Option<&str>) -> (Option<UpdateInfo>, Option<String>) {
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent("vg-expect-update")
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return (None, etag.map(str::to_string)),
+    };
+
+    let mut req = client.get(API_URL);
+    if let Some(et) = etag {
+        req = req.header("If-None-Match", et);
+    }
+
+    let resp = match req.send() {
+        Ok(r) => r,
+        Err(_) => return (None, etag.map(str::to_string)),
+    };
+
+    let new_etag = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+
+    // 304 = nothing changed
+    if resp.status().as_u16() == 304 {
+        return (None, new_etag.or_else(|| etag.map(str::to_string)));
+    }
+
+    let release: GithubRelease = match resp.json() {
+        Ok(r) => r,
+        Err(_) => return (None, new_etag),
+    };
+
+    if !version_is_newer(&release.tag_name, CURRENT_VERSION) {
+        return (None, new_etag);
+    }
+
+    let artifact_name = detect_artifact();
+    let asset = match release.assets.iter().find(|a| a.name == artifact_name).cloned() {
+        Some(a) => a,
+        None => return (None, new_etag),
+    };
+
+    let info = UpdateInfo {
+        latest_version: release.tag_name,
+        asset,
+        release_notes: release.body,
+    };
+    (Some(info), new_etag)
+}
+
 /// Download and install the update described by `info`. Shows progress via `ui`.
 pub fn apply(info: &UpdateInfo) -> Result<()> {
     let artifact_name = &info.asset.name;
@@ -197,6 +254,10 @@ pub fn run() -> Result<()> {
 
     ui::section(&format!("Downloading {}", info.asset.name));
     apply(&info)?;
+
+    // Clear the cached pending version so the update banner stops showing.
+    let (etag, _) = ConfigManager::read_update_state();
+    ConfigManager::write_update_state(etag.as_deref(), None);
 
     println!();
     ui::success(&format!("Updated to {} — restart vg to use the new version.", info.latest_version));

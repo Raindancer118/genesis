@@ -10,7 +10,7 @@ mod analytics;
 #[derive(Parser, Debug)]
 #[command(name = "vg")]
 #[command(author = "Volantic")]
-#[command(version = "3.8.2")]
+#[command(version = "3.8.3")]
 #[command(about = "Volantic Genesis — Fast, focused system CLI")]
 struct Cli {
     #[command(subcommand)]
@@ -79,9 +79,9 @@ enum Commands {
     /// Wait until a new release is available, then install it automatically
     #[command(name = "expect-update")]
     ExpectUpdate {
-        /// Polling interval in seconds (default: 60)
-        #[arg(short = 'i', long, default_value = "60")]
-        interval: u64,
+        /// Polling interval in seconds (overrides config expect_update.interval_secs)
+        #[arg(short = 'i', long)]
+        interval: Option<u64>,
     },
     /// View or change settings
     Config {
@@ -211,7 +211,8 @@ async fn main() -> Result<()> {
             commands::self_update::run()?;
         }
         Commands::ExpectUpdate { interval } => {
-            commands::self_update::expect_update(interval)?;
+            let secs = interval.unwrap_or(config_manager.config.expect_update.interval_secs);
+            commands::self_update::expect_update(secs)?;
         }
         Commands::Config { action, key, value } => {
             commands::config_cmd::run(action, key, value, &mut config_manager)?;

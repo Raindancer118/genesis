@@ -14,6 +14,21 @@ pub struct Config {
     pub analytics: AnalyticsConfig,
     #[serde(default)]
     pub auto_index: AutoIndexConfig,
+    #[serde(default)]
+    pub expect_update: ExpectUpdateConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
+pub struct ExpectUpdateConfig {
+    /// Polling interval in seconds for `vg expect-update`. Default: 60
+    pub interval_secs: u64,
+}
+
+impl Default for ExpectUpdateConfig {
+    fn default() -> Self {
+        Self { interval_secs: 60 }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

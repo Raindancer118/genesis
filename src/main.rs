@@ -10,7 +10,7 @@ mod analytics;
 #[derive(Parser, Debug)]
 #[command(name = "vg")]
 #[command(author = "Volantic")]
-#[command(version = "3.4.0")]
+#[command(version = "3.5.0")]
 #[command(about = "Volantic Genesis — Fast, focused system CLI")]
 struct Cli {
     #[command(subcommand)]
@@ -53,6 +53,9 @@ enum Commands {
         /// Show match scores and timing breakdown
         #[arg(short = 'v', long)]
         verbose: bool,
+        /// Search all indexed scopes including system files (default: user files only)
+        #[arg(short = 'a', long)]
+        all: bool,
     },
     /// Build or show file search index
     Index {
@@ -152,7 +155,7 @@ async fn main() -> Result<()> {
         Commands::Uninstall { pkg } => {
             commands::package::uninstall(&pkg)?;
         }
-        Commands::Search { query, ext, path, limit, interactive, verbose } => {
+        Commands::Search { query, ext, path, limit, interactive, verbose, all } => {
             let use_tui = interactive || query.is_none();
             if use_tui {
                 let initial = query.as_deref().unwrap_or("");
@@ -164,6 +167,7 @@ async fn main() -> Result<()> {
                     path_filter: path,
                     limit,
                     verbose,
+                    all_scopes: all,
                 }, &config_manager)?;
             }
         }

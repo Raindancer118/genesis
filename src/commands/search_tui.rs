@@ -31,6 +31,7 @@ struct TuiResult {
     size: i64,
     match_type: String,
     modified_unix: i64,
+    scope: String,
 }
 
 enum Focus {
@@ -50,6 +51,8 @@ struct TuiState {
     last_search_time: std::time::Instant,
     needs_search: bool,
     preview_lines: Vec<String>,
+    /// When true, search includes system-indexed files
+    all_scopes: bool,
 }
 
 impl TuiState {
@@ -68,6 +71,7 @@ impl TuiState {
                 .unwrap_or_else(std::time::Instant::now),
             needs_search: !initial_query.is_empty(),
             preview_lines: Vec::new(),
+            all_scopes: false,
         }
     }
 
@@ -120,27 +124,31 @@ impl Drop for TermGuard {
     }
 }
 
-fn do_search(query: &str, conn: &rusqlite::Connection) -> (Vec<TuiResult>, f64) {
+fn do_search(query: &str, all_scopes: bool, conn: &rusqlite::Connection) -> (Vec<TuiResult>, f64) {
     if query.trim().is_empty() {
         return (Vec::new(), 0.0);
     }
     let start = std::time::Instant::now();
     let fts_query = sanitize_fts_query(query);
     let limit = 50i64;
+    let scope_clause = if all_scopes { "" } else { " AND m.scope = 'user'" };
 
-    let sql = "SELECT f.rowid, f.name, f.path, m.size, m.ext,
-                    bm25(files, 10.0, 5.0, 1.0) as bm25_score,
-                    m.modified_unix
-             FROM files f
-             JOIN files_meta m ON f.rowid = m.rowid
-             WHERE files MATCH ?1
-             ORDER BY bm25(files, 10.0, 5.0, 1.0)
-             LIMIT ?2";
+    let sql = format!(
+        "SELECT f.rowid, f.name, f.path, m.size, m.ext,
+                bm25(files, 10.0, 5.0, 1.0) as bm25_score,
+                m.modified_unix, m.scope
+         FROM files f
+         JOIN files_meta m ON f.rowid = m.rowid
+         WHERE files MATCH ?1{}
+         ORDER BY bm25(files, 10.0, 5.0, 1.0)
+         LIMIT ?2",
+        scope_clause
+    );
 
     let mut results: Vec<TuiResult> = Vec::new();
 
-    if let Ok(mut stmt) = conn.prepare(sql) {
-        type Row = (i64, String, String, i64, String, f64, i64);
+    if let Ok(mut stmt) = conn.prepare(&sql) {
+        type Row = (i64, String, String, i64, String, f64, i64, String);
         let rows: Vec<Row> = stmt
             .query_map(params![fts_query, limit], |row| Ok((
                 row.get::<_, i64>(0)?,
@@ -150,23 +158,24 @@ fn do_search(query: &str, conn: &rusqlite::Connection) -> (Vec<TuiResult>, f64) 
                 row.get::<_, String>(4)?,
                 row.get::<_, f64>(5)?,
                 row.get::<_, i64>(6)?,
+                row.get::<_, String>(7)?,
             )))
             .map(|iter| iter.filter_map(|r| r.ok()).collect())
             .unwrap_or_default();
 
-        let mut scored: Vec<(f64, String, String, i64, String, i64)> = rows
+        let mut scored: Vec<(f64, String, String, i64, String, i64, String)> = rows
             .into_iter()
-            .map(|(_, name, path, size, _ext, bm25, modified_unix)| {
+            .map(|(_, name, path, size, _ext, bm25, modified_unix, scope)| {
                 let score = compute_score(bm25, &name, &path, query, modified_unix);
                 let match_type = determine_match_type(query, &name, &path, false);
-                (score, name, path, size, match_type, modified_unix)
+                (score, name, path, size, match_type, modified_unix, scope)
             })
             .collect();
 
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
-        for (_, name, path, size, match_type, modified_unix) in scored {
-            results.push(TuiResult { name, path, size, match_type, modified_unix });
+        for (_, name, path, size, match_type, modified_unix, scope) in scored {
+            results.push(TuiResult { name, path, size, match_type, modified_unix, scope });
         }
     }
 
@@ -247,9 +256,15 @@ fn render(f: &mut Frame, state: &TuiState) {
             _       => Color::DarkGray,
         };
         let age = fmt_age(r.modified_unix);
+        let sys_span = if r.scope == "system" {
+            Span::styled(" sys", Style::default().fg(Color::Rgb(148, 103, 189)))
+        } else {
+            Span::raw("")
+        };
         let line = Line::from(vec![
             Span::styled(format!("{:<6}", r.match_type), Style::default().fg(type_color)),
             Span::styled(r.name.clone(), name_style),
+            sys_span,
             Span::styled(format!("  {}", age), Style::default().fg(Color::DarkGray)),
         ]);
         ListItem::new(line)
@@ -298,9 +313,17 @@ fn render(f: &mut Frame, state: &TuiState) {
     f.render_widget(preview, main[1]);
 
     // ── Status bar ──
-    let status = Paragraph::new(
-        "↑↓ navigate  Enter open in $EDITOR  Tab toggle focus  ←→ cursor  Esc exit"
-    ).style(Style::default().fg(Color::DarkGray));
+    let scope_indicator = if state.all_scopes {
+        "  [ALL]"
+    } else {
+        "  [user]"
+    };
+    let status_text = format!(
+        "↑↓ navigate  Enter open  Tab toggle focus  ^A toggle scope{}  Esc exit",
+        scope_indicator
+    );
+    let scope_color = if state.all_scopes { Color::Rgb(148, 103, 189) } else { Color::DarkGray };
+    let status = Paragraph::new(status_text).style(Style::default().fg(scope_color));
     f.render_widget(status, outer[2]);
 }
 
@@ -332,7 +355,7 @@ pub fn run_interactive_with_query(_config: &ConfigManager, initial_query: &str) 
 
     // Perform initial search if query was provided
     if !initial_query.is_empty() {
-        let (results, elapsed) = do_search(initial_query, &conn);
+        let (results, elapsed) = do_search(initial_query, state.all_scopes, &conn);
         state.results = results;
         state.search_elapsed_ms = elapsed;
         state.last_query = initial_query.to_string();
@@ -347,8 +370,8 @@ pub fn run_interactive_with_query(_config: &ConfigManager, initial_query: &str) 
         if state.needs_search
             && state.last_search_time.elapsed().as_millis() as u64 >= DEBOUNCE_MS
         {
-            if state.query != state.last_query {
-                let (results, elapsed) = do_search(&state.query, &conn);
+            if state.query != state.last_query || state.needs_search {
+                let (results, elapsed) = do_search(&state.query, state.all_scopes, &conn);
                 state.results = results;
                 state.search_elapsed_ms = elapsed;
                 state.last_query = state.query.clone();
@@ -371,6 +394,14 @@ pub fn run_interactive_with_query(_config: &ConfigManager, initial_query: &str) 
         if let Event::Key(key) = event::read()? {
             match (key.code, key.modifiers) {
                 (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => break,
+
+                // Ctrl+A: toggle all-scopes (user-only ↔ entire system)
+                (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+                    state.all_scopes = !state.all_scopes;
+                    state.last_search_time = std::time::Instant::now();
+                    state.needs_search = true;
+                    state.last_query.clear(); // force re-search
+                }
 
                 (KeyCode::Enter, _) => {
                     // Temporarily leave TUI, open editor, then restore

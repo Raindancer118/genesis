@@ -40,7 +40,14 @@ impl Default for AutoIndexConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct SearchConfig {
+    /// Paths indexed as "user" scope (searched by default)
     pub default_paths: Vec<String>,
+    /// When true, index the entire system in addition to default_paths
+    pub full_system_index: bool,
+    /// Root paths to walk when full_system_index is enabled (default: ["/"])
+    pub system_index_roots: Vec<String>,
+    /// Paths that are NEVER indexed (even when full_system_index = true)
+    pub system_exclude_paths: Vec<String>,
     pub ignore_patterns: Vec<String>,
     pub max_depth: usize,
     pub max_results: usize,
@@ -57,6 +64,13 @@ impl Default for SearchConfig {
             default_paths: vec![dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .to_string_lossy().to_string()],
+            full_system_index: false,
+            system_index_roots: vec!["/".into()],
+            system_exclude_paths: vec![
+                "/proc".into(), "/sys".into(), "/dev".into(),
+                "/run".into(), "/tmp".into(), "/var/tmp".into(),
+                "/var/run".into(), "/var/lock".into(),
+            ],
             ignore_patterns: vec![
                 "node_modules".into(), ".git".into(), "target".into(),
                 ".cache".into(), "__pycache__".into(), ".npm".into(),
